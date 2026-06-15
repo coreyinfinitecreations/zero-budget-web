@@ -1,0 +1,16 @@
+# Dependencies
+node_modules
+
+# Next.js
+.next
+out
+
+# Vercel
+.vercel
+
+# Env (keep example)
+.env
+.env*.local
+!.env.local.example
+
+.DS_Store
