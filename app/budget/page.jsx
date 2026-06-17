@@ -15,6 +15,27 @@ import {
   shiftMonth,
 } from '../../lib/budget';
 
+// Stacked-bills logo mark (EveryDollar-style).
+function LogoMark({ size = 30 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" fill="none" className="mark">
+      <rect x="3" y="14" width="26" height="9" rx="2.5" fill="#3d9140" />
+      <rect x="3" y="9" width="26" height="9" rx="2.5" fill="#4caf50" />
+      <rect x="3" y="4" width="26" height="9" rx="2.5" fill="#6cc24a" />
+      <circle cx="16" cy="8.5" r="2.6" fill="#fff" opacity="0.9" />
+    </svg>
+  );
+}
+
+function BudgetIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M3 10h18M8 4v16" />
+    </svg>
+  );
+}
+
 // Derive the categories to show for a month: its saved budget, else carry the
 // most recent prior month forward (spent reset), else the default template.
 function deriveCategories(budgets, month) {
@@ -139,7 +160,7 @@ export default function BudgetPage() {
     setCategories((cats) => cats.filter((c) => c.id !== catId));
 
   const addCategory = () => {
-    const name = window.prompt('New category name');
+    const name = window.prompt('New group name');
     if (!name || !name.trim()) return;
     setCategories((cats) => [
       ...cats,
@@ -156,134 +177,163 @@ export default function BudgetPage() {
 
   const incomeCats = categories.filter((c) => c.type === 'income');
   const expenseCats = categories.filter((c) => c.type === 'expense');
+  const initials = (email || '?').slice(0, 2).toUpperCase();
+  const [monthName, yearNum] = formatMonthLabel(currentMonth).split(' ');
 
   return (
-    <>
-      <header className="topbar">
-        <div className="topbar-inner">
-          <span className="brand">Zero Budget</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-            <span className="save-state">
-              {saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'All changes saved'}
-            </span>
-            <button className="btn link" onClick={signOut} title={email}>
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="sidebar-logo">
+          <LogoMark />
+          <span className="wordmark">Zero Budget</span>
+        </div>
+
+        <nav className="nav">
+          <button className="nav-item active">
+            <BudgetIcon />
+            Budget
+          </button>
+        </nav>
+
+        <div className="sidebar-foot">
+          <div className="avatar">{initials}</div>
+          <div className="who">
+            <div className="email" title={email}>
+              {email}
+            </div>
+            <button className="signout" onClick={signOut}>
               Sign out
             </button>
           </div>
         </div>
-      </header>
+      </aside>
 
-      <main className="container">
-        <div className="monthbar">
-          <button className="iconbtn" onClick={() => setCurrentMonth((m) => shiftMonth(m, -1))} aria-label="Previous month">
-            ‹
-          </button>
-          <h2>{formatMonthLabel(currentMonth)}</h2>
-          <button className="iconbtn" onClick={() => setCurrentMonth((m) => shiftMonth(m, 1))} aria-label="Next month">
-            ›
-          </button>
-        </div>
-
-        <section className="summary">
-          <div className="stat">
-            <div className="label">Planned income</div>
-            <div className="value pos">{formatMoney(totals.plannedIncome)}</div>
-          </div>
-          <div className="stat">
-            <div className="label">Planned expenses</div>
-            <div className="value">{formatMoney(totals.plannedExpenses)}</div>
-          </div>
-          <div className="stat">
-            <div className="label">Left to budget</div>
-            <div className={`value ${totals.remaining < 0 ? 'neg' : 'pos'}`}>
-              {formatMoney(totals.remaining)}
+      <main className="main">
+        <div className="content">
+          <div className="month-head">
+            <div>
+              <h1 className="month-title">
+                <strong>{monthName}</strong> {yearNum}
+              </h1>
+              <div className="left-to-budget">
+                <span className={`amt ${totals.remaining < 0 ? 'neg' : 'pos'}`}>
+                  {formatMoney(totals.remaining)}
+                </span>{' '}
+                left to budget
+              </div>
+            </div>
+            <div className="month-nav">
+              <button className="navbtn" onClick={() => setCurrentMonth((m) => shiftMonth(m, -1))} aria-label="Previous month">
+                ‹
+              </button>
+              <button className="navbtn" onClick={() => setCurrentMonth((m) => shiftMonth(m, 1))} aria-label="Next month">
+                ›
+              </button>
             </div>
           </div>
-        </section>
 
-        {[...incomeCats, ...expenseCats].map((cat) => (
-          <CategoryCard
-            key={cat.id}
-            cat={cat}
-            onRename={(name) => renameCategory(cat.id, name)}
-            onDelete={() => deleteCategory(cat.id)}
-            onAddItem={() => addItem(cat.id)}
-            onUpdateItem={(itemId, field, value) => updateItem(cat.id, itemId, field, value)}
-            onDeleteItem={(itemId) => deleteItem(cat.id, itemId)}
-          />
-        ))}
+          {[...incomeCats, ...expenseCats].map((cat) => (
+            <GroupCard
+              key={cat.id}
+              cat={cat}
+              onRename={(name) => renameCategory(cat.id, name)}
+              onDelete={() => deleteCategory(cat.id)}
+              onAddItem={() => addItem(cat.id)}
+              onUpdateItem={(itemId, field, value) => updateItem(cat.id, itemId, field, value)}
+              onDeleteItem={(itemId) => deleteItem(cat.id, itemId)}
+            />
+          ))}
 
-        <button className="btn ghost" onClick={addCategory}>
-          + Add category
-        </button>
-        <div style={{ height: 40 }} />
+          <button className="btn ghost" onClick={addCategory}>
+            + Add group
+          </button>
+        </div>
       </main>
-    </>
+    </div>
   );
 }
 
-function CategoryCard({ cat, onRename, onDelete, onAddItem, onUpdateItem, onDeleteItem }) {
+function GroupCard({ cat, onRename, onDelete, onAddItem, onUpdateItem, onDeleteItem }) {
+  const [open, setOpen] = useState(true);
   const isIncome = cat.type === 'income';
+  const middleLabel = isIncome ? 'Received' : 'Spent';
+
+  const totals = (cat.items || []).reduce(
+    (acc, i) => {
+      acc.planned += Number(i.planned) || 0;
+      acc.spent += Number(i.spent) || 0;
+      return acc;
+    },
+    { planned: 0, spent: 0 }
+  );
+  const totalRemaining = totals.planned - totals.spent;
+
   return (
-    <div className="cat">
-      <div className="cat-head">
-        <input
-          className="cat-name"
-          value={cat.name}
-          onChange={(e) => onRename(e.target.value)}
-        />
-        <span className={`pill ${isIncome ? '' : 'expense'}`}>{isIncome ? 'Income' : 'Expense'}</span>
-        {cat.id !== 'income' && (
-          <button className="del" onClick={onDelete} title="Delete category">
-            ×
+    <div className="group">
+      <div className="group-head">
+        <div className="group-name">
+          <button className="chev" onClick={() => setOpen((o) => !o)} aria-label={open ? 'Collapse' : 'Expand'}>
+            {open ? '▾' : '▸'}
           </button>
-        )}
+          <input value={cat.name} onChange={(e) => onRename(e.target.value)} />
+          {cat.id !== 'income' && (
+            <button className="del" onClick={onDelete} title="Delete group">
+              ×
+            </button>
+          )}
+        </div>
+        <span className="col-head">Planned</span>
+        <span className="col-head">{middleLabel}</span>
+        <span className="col-head">Remaining</span>
+        <span />
       </div>
 
-      {cat.items.length > 0 && (
-        <div className="row" style={{ paddingTop: 6, paddingBottom: 6 }}>
-          <span className="col-head" style={{ textAlign: 'left' }}>
-            Item
-          </span>
-          <span className="col-head">Planned</span>
-          <span className="col-head">{isIncome ? 'Received' : 'Spent'}</span>
+      {open &&
+        cat.items.map((item) => {
+          const remaining = (Number(item.planned) || 0) - (Number(item.spent) || 0);
+          return (
+            <div className="line" key={item.id}>
+              <input
+                className="name"
+                placeholder="Add item name"
+                value={item.name}
+                onChange={(e) => onUpdateItem(item.id, 'name', e.target.value)}
+              />
+              <input
+                className="money"
+                type="number"
+                inputMode="decimal"
+                value={item.planned ?? 0}
+                onChange={(e) => onUpdateItem(item.id, 'planned', Number(e.target.value) || 0)}
+              />
+              <input
+                className="money"
+                type="number"
+                inputMode="decimal"
+                value={item.spent ?? 0}
+                onChange={(e) => onUpdateItem(item.id, 'spent', Number(e.target.value) || 0)}
+              />
+              <span className={`remaining ${remaining < 0 ? 'neg' : ''}`}>
+                {formatMoney(remaining)}
+              </span>
+              <button className="del" onClick={() => onDeleteItem(item.id)} title="Remove">
+                ×
+              </button>
+            </div>
+          );
+        })}
+
+      {open && (
+        <div className="group-foot">
+          <button className="add-line" onClick={onAddItem}>
+            + {isIncome ? 'Add income' : 'Add item'}
+          </button>
+          <span className="foot-total">{formatMoney(totals.planned)}</span>
+          <span className="foot-total">{formatMoney(totals.spent)}</span>
+          <span className="foot-total pad">{formatMoney(totalRemaining)}</span>
           <span />
         </div>
       )}
-
-      {cat.items.map((item) => (
-        <div className="row" key={item.id}>
-          <input
-            className="name"
-            placeholder="Name"
-            value={item.name}
-            onChange={(e) => onUpdateItem(item.id, 'name', e.target.value)}
-          />
-          <input
-            className="money"
-            type="number"
-            inputMode="decimal"
-            value={item.planned ?? 0}
-            onChange={(e) => onUpdateItem(item.id, 'planned', Number(e.target.value) || 0)}
-          />
-          <input
-            className="money"
-            type="number"
-            inputMode="decimal"
-            value={item.spent ?? 0}
-            onChange={(e) => onUpdateItem(item.id, 'spent', Number(e.target.value) || 0)}
-          />
-          <button className="del" onClick={() => onDeleteItem(item.id)} title="Remove">
-            ×
-          </button>
-        </div>
-      ))}
-
-      <div className="cat-foot">
-        <button className="linklike" onClick={onAddItem}>
-          + Add line item
-        </button>
-      </div>
     </div>
   );
 }

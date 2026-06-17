@@ -60,14 +60,22 @@ export default function LoginPage() {
   return (
     <div className="auth-wrap">
       <form className="auth-card" onSubmit={onSubmit}>
-        <h1>Zero Budget</h1>
+        <div className="auth-logo">
+          <svg width="34" height="34" viewBox="0 0 32 32" fill="none">
+            <rect x="3" y="14" width="26" height="9" rx="2.5" fill="#3d9140" />
+            <rect x="3" y="9" width="26" height="9" rx="2.5" fill="#4caf50" />
+            <rect x="3" y="4" width="26" height="9" rx="2.5" fill="#6cc24a" />
+            <circle cx="16" cy="8.5" r="2.6" fill="#fff" opacity="0.9" />
+          </svg>
+          <span className="wordmark">Zero Budget</span>
+        </div>
         <p className="sub">
           {mode === 'signin' ? 'Sign in to your budget' : 'Create your account'}
         </p>
 
         {error && <div className="error">{error}</div>}
         {notice && (
-          <div className="error" style={{ background: '#eef9f0', color: '#249b40' }}>
+          <div className="error" style={{ background: '#eef9f0', color: '#3d9140' }}>
             {notice}
           </div>
         )}
