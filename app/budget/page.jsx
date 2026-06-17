@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabase';
-import { stateApi, transactionsApi } from '../../lib/api';
+import { accountsApi, plaidApi, stateApi, transactionsApi } from '../../lib/api';
 import Sidebar from '../../components/Sidebar';
 import {
   DEFAULT_CATEGORIES,
@@ -58,10 +58,15 @@ export default function BudgetPage() {
   const [currentMonth, setCurrentMonth] = useState(getMonthKey(new Date()));
   const [saveState, setSaveState] = useState('saved'); // 'saved' | 'saving' | 'error'
   const [txTab, setTxTab] = useState('new'); // 'new' | 'tracked'
+  const [txStatus, setTxStatus] = useState('');
+  const [syncing, setSyncing] = useState(false);
   const [dragOverKey, setDragOverKey] = useState(null);
   const [dragInfo, setDragInfo] = useState(null); // { assigned } while dragging — drives highlights
   const [unassignOver, setUnassignOver] = useState(false);
+  const [reorderKind, setReorderKind] = useState(null); // 'cat' | 'item' | null
+  const [reorderOver, setReorderOver] = useState(null); // catId or `${catId}:${itemId}` being hovered
   const draggingRef = useRef(null); // { tx, assigned } — read at drop time
+  const reorderRef = useRef(null); // { kind, catId, itemId } — read at drop time
   const loadedRef = useRef(false);
 
   // ── Auth + initial load ────────────────────────────────────────────────────
@@ -96,14 +101,23 @@ export default function BudgetPage() {
           setReady(true);
         }
       }
-      // Best-effort: pull any server-stored (Plaid-synced) transactions.
+      // Pull server-stored (Plaid-synced) transactions; if banks are connected,
+      // trigger a fresh sync first so newly-posted transactions appear.
       try {
+        const { accounts } = await accountsApi.list();
+        if (accounts?.length) {
+          try {
+            await plaidApi.syncTransactions();
+          } catch (e) {
+            if (active) setTxStatus(`Couldn’t sync from your bank: ${e.message}`);
+          }
+        }
         const { transactions } = await transactionsApi.list({ limit: 250 });
         if (active && Array.isArray(transactions)) {
           setPlaidTxns(transactions.filter((t) => t.source === 'plaid').map(fromPlaid));
         }
       } catch (e) {
-        // No accounts / not signed in to API yet — fine.
+        if (active) setTxStatus(`Couldn’t load bank transactions: ${e.message}`);
       }
     })();
     return () => {
@@ -176,6 +190,37 @@ export default function BudgetPage() {
       ...cats,
       { id: newId('cat'), name: name.trim(), type: 'expense', targetPercent: 5, items: [] },
     ]);
+  };
+
+  // Reorder items within a single category.
+  const reorderItem = (catId, fromItemId, toItemId) => {
+    if (String(fromItemId) === String(toItemId)) return;
+    setCategories((cats) =>
+      cats.map((c) => {
+        if (c.id !== catId) return c;
+        const items = [...c.items];
+        const from = items.findIndex((i) => String(i.id) === String(fromItemId));
+        if (from < 0) return c;
+        const [moved] = items.splice(from, 1);
+        const to = items.findIndex((i) => String(i.id) === String(toItemId));
+        items.splice(to < 0 ? items.length : to, 0, moved);
+        return { ...c, items };
+      })
+    );
+  };
+
+  // Reorder categories. Income is pinned — it can't be moved and can't be a drop target.
+  const reorderCategory = (fromCatId, toCatId) => {
+    if (fromCatId === toCatId) return;
+    setCategories((cats) => {
+      const moving = cats.find((c) => c.id === fromCatId);
+      const target = cats.find((c) => c.id === toCatId);
+      if (!moving || !target || moving.type === 'income' || target.type === 'income') return cats;
+      const next = cats.filter((c) => c.id !== fromCatId);
+      const to = next.findIndex((c) => c.id === toCatId);
+      next.splice(to < 0 ? next.length : to, 0, moving);
+      return next;
+    });
   };
 
   // ── Transaction assignment (mirrors the mobile BudgetContext) ────────────────
@@ -306,6 +351,26 @@ export default function BudgetPage() {
     router.replace('/login');
   }
 
+  // Manual "Sync" — pull the latest from connected banks, then refresh the list.
+  const syncNow = useCallback(async () => {
+    setSyncing(true);
+    setTxStatus('');
+    try {
+      const { accounts } = await accountsApi.list();
+      if (!accounts?.length) {
+        setTxStatus('No banks connected yet — connect one on the Accounts page.');
+        return;
+      }
+      await plaidApi.syncTransactions();
+      const { transactions } = await transactionsApi.list({ limit: 250 });
+      setPlaidTxns((transactions || []).filter((t) => t.source === 'plaid').map(fromPlaid));
+    } catch (e) {
+      setTxStatus(`Sync failed: ${e.message}`);
+    } finally {
+      setSyncing(false);
+    }
+  }, []);
+
   // ── Transaction lists for the panel ──────────────────────────────────────────
   const assignedPlaidSet = useMemo(
     () => new Set(doc.assignedPlaidTxIds || []),
@@ -375,13 +440,36 @@ export default function BudgetPage() {
     setDragInfo({ assigned });
   };
 
-  // Drop on a budget line item: assign, or reassign if it was already tracked.
+  const startReorder = (kind, catId, itemId) => {
+    reorderRef.current = { kind, catId, itemId };
+    setReorderKind(kind);
+  };
+  const endReorder = () => {
+    reorderRef.current = null;
+    setReorderKind(null);
+    setReorderOver(null);
+  };
+
+  // Drop on a budget line item: reorder within the category, or assign/reassign a transaction.
   const handleDropOnItem = (catId, itemId) => {
+    const r = reorderRef.current;
+    if (r?.kind === 'item' && r.catId === catId) {
+      endReorder();
+      reorderItem(catId, r.itemId, itemId);
+      return;
+    }
     const d = draggingRef.current;
     endDrag();
     if (!d) return;
     if (d.assigned) unassignTransaction(d.tx); // remove from its old item first
     assignTransaction(d.tx, catId, itemId);
+  };
+
+  // Drop on a category card: reorder categories (Income excluded).
+  const handleDropOnCategory = (targetCatId) => {
+    const r = reorderRef.current;
+    endReorder();
+    if (r?.kind === 'cat') reorderCategory(r.catId, targetCatId);
   };
 
   // Drop back onto the transactions panel: unassign (only meaningful if tracked).
@@ -426,6 +514,13 @@ export default function BudgetPage() {
               dragOverKey={dragOverKey}
               setDragOverKey={setDragOverKey}
               isDragging={!!dragInfo}
+              reorderKind={reorderKind}
+              reorderOver={reorderOver}
+              setReorderOver={setReorderOver}
+              onStartItemReorder={startReorder}
+              onStartCategoryReorder={startReorder}
+              onEndReorder={endReorder}
+              onDropCategory={handleDropOnCategory}
               onDropItem={handleDropOnItem}
               onRename={(name) => renameCategory(cat.id, name)}
               onDelete={() => deleteCategory(cat.id)}
@@ -456,9 +551,77 @@ export default function BudgetPage() {
         unassignOver={unassignOver}
         setUnassignOver={setUnassignOver}
         onUnassignDrop={handleUnassignDrop}
+        onSync={syncNow}
+        syncing={syncing}
+        txStatus={txStatus}
         saveState={saveState}
       />
     </div>
+  );
+}
+
+function Grip() {
+  return (
+    <svg width="10" height="16" viewBox="0 0 10 16" aria-hidden="true">
+      <g fill="currentColor">
+        <circle cx="2" cy="3" r="1.3" />
+        <circle cx="8" cy="3" r="1.3" />
+        <circle cx="2" cy="8" r="1.3" />
+        <circle cx="8" cy="8" r="1.3" />
+        <circle cx="2" cy="13" r="1.3" />
+        <circle cx="8" cy="13" r="1.3" />
+      </g>
+    </svg>
+  );
+}
+
+// Shows the value as plain text; turns into an editable input only when clicked.
+function EditableMoney({ value, onCommit }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
+  const commit = () => {
+    onCommit(Number(draft) || 0);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        className="money editing"
+        type="number"
+        inputMode="decimal"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit();
+          else if (e.key === 'Escape') setEditing(false);
+        }}
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="moneycell"
+      onClick={() => {
+        setDraft(String(value ?? 0));
+        setEditing(true);
+      }}
+    >
+      {formatMoney(value)}
+    </button>
   );
 }
 
@@ -470,13 +633,21 @@ function GroupCard({
   onUpdateItem,
   onDeleteItem,
   onDropItem,
+  onDropCategory,
+  onStartItemReorder,
+  onStartCategoryReorder,
+  onEndReorder,
   dragOverKey,
   setDragOverKey,
   isDragging,
+  reorderKind,
+  reorderOver,
+  setReorderOver,
 }) {
-  const [open, setOpen] = useState(true);
   const isIncome = cat.type === 'income';
   const middleLabel = isIncome ? 'Received' : 'Spent';
+  const catReorderTarget = reorderKind === 'cat' && !isIncome;
+  const catOver = catReorderTarget && reorderOver === cat.id;
 
   const totals = (cat.items || []).reduce(
     (acc, i) => {
@@ -489,14 +660,38 @@ function GroupCard({
   const totalRemaining = totals.planned - totals.spent;
 
   return (
-    <div className="group">
+    <div
+      className={`group${catOver ? ' cat-over' : ''}`}
+      onDragOver={(e) => {
+        if (catReorderTarget) {
+          e.preventDefault();
+          if (reorderOver !== cat.id) setReorderOver(cat.id);
+        }
+      }}
+      onDrop={(e) => {
+        if (reorderKind === 'cat') {
+          e.preventDefault();
+          onDropCategory(cat.id);
+        }
+      }}
+    >
       <div className="group-head">
         <div className="group-name">
-          <button className="chev" onClick={() => setOpen((o) => !o)} aria-label={open ? 'Collapse' : 'Expand'}>
-            {open ? '▾' : '▸'}
-          </button>
+          {isIncome ? (
+            <span className="grip-spacer" />
+          ) : (
+            <span
+              className="grip"
+              draggable
+              onDragStart={() => onStartCategoryReorder('cat', cat.id)}
+              onDragEnd={onEndReorder}
+              title="Drag to reorder"
+            >
+              <Grip />
+            </span>
+          )}
           <input value={cat.name} onChange={(e) => onRename(e.target.value)} />
-          {cat.id !== 'income' && (
+          {!isIncome && (
             <button className="del" onClick={onDelete} title="Delete group">
               ×
             </button>
@@ -508,66 +703,71 @@ function GroupCard({
         <span />
       </div>
 
-      {open &&
-        cat.items.map((item) => {
-          const remaining = (Number(item.planned) || 0) - (Number(item.spent) || 0);
-          const key = `${cat.id}:${item.id}`;
-          const isOver = dragOverKey === key;
-          return (
-            <div
-              className={`line${isDragging ? ' droppable' : ''}${isOver ? ' dragover' : ''}`}
-              key={item.id}
-              onDragOver={(e) => {
+      {cat.items.map((item) => {
+        const remaining = (Number(item.planned) || 0) - (Number(item.spent) || 0);
+        const key = `${cat.id}:${item.id}`;
+        const txOver = isDragging && dragOverKey === key;
+        const itemReorderTarget = reorderKind === 'item';
+        const itemOver = itemReorderTarget && reorderOver === key;
+        return (
+          <div
+            className={`line${isDragging ? ' droppable' : ''}${txOver ? ' dragover' : ''}${itemOver ? ' reorder-over' : ''}`}
+            key={item.id}
+            onDragOver={(e) => {
+              if (itemReorderTarget) {
+                e.preventDefault();
+                if (reorderOver !== key) setReorderOver(key);
+              } else if (isDragging) {
                 e.preventDefault();
                 if (dragOverKey !== key) setDragOverKey(key);
-              }}
-              onDragLeave={(e) => {
-                if (e.currentTarget === e.target && dragOverKey === key) setDragOverKey(null);
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                onDropItem(cat.id, item.id);
-              }}
-            >
+              }
+            }}
+            onDragLeave={(e) => {
+              if (e.currentTarget !== e.target) return;
+              if (dragOverKey === key) setDragOverKey(null);
+              if (reorderOver === key) setReorderOver(null);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              onDropItem(cat.id, item.id);
+            }}
+          >
+            <div className="line-name">
+              <span
+                className="grip"
+                draggable
+                onDragStart={() => onStartItemReorder('item', cat.id, item.id)}
+                onDragEnd={onEndReorder}
+                title="Drag to reorder"
+              >
+                <Grip />
+              </span>
               <input
                 className="name"
                 placeholder="Add item name"
                 value={item.name}
                 onChange={(e) => onUpdateItem(item.id, 'name', e.target.value)}
               />
-              <input
-                className="money"
-                type="number"
-                inputMode="decimal"
-                value={item.planned ?? 0}
-                onChange={(e) => onUpdateItem(item.id, 'planned', Number(e.target.value) || 0)}
-              />
-              <input
-                className="money"
-                type="number"
-                inputMode="decimal"
-                value={item.spent ?? 0}
-                onChange={(e) => onUpdateItem(item.id, 'spent', Number(e.target.value) || 0)}
-              />
-              <span className={`remaining ${remaining < 0 ? 'neg' : ''}`}>{formatMoney(remaining)}</span>
-              <button className="del" onClick={() => onDeleteItem(item.id)} title="Remove">
-                ×
-              </button>
             </div>
-          );
-        })}
+            <EditableMoney value={item.planned ?? 0} onCommit={(v) => onUpdateItem(item.id, 'planned', v)} />
+            <EditableMoney value={item.spent ?? 0} onCommit={(v) => onUpdateItem(item.id, 'spent', v)} />
+            <span className={`remaining ${remaining < 0 ? 'neg' : ''}`}>{formatMoney(remaining)}</span>
+            <button className="del" onClick={() => onDeleteItem(item.id)} title="Remove">
+              ×
+            </button>
+          </div>
+        );
+      })}
 
-      {open && (
-        <div className="group-foot">
-          <button className="add-line" onClick={onAddItem}>
-            + {isIncome ? 'Add income' : 'Add item'}
-          </button>
-          <span className="foot-total">{formatMoney(totals.planned)}</span>
-          <span className="foot-total">{formatMoney(totals.spent)}</span>
-          <span className="foot-total pad">{formatMoney(totalRemaining)}</span>
-          <span />
-        </div>
-      )}
+      <div className="group-foot">
+        <button className="add-line" onClick={onAddItem}>
+          + {isIncome ? 'Add income' : 'Add item'}
+        </button>
+        <span className="foot-total">{formatMoney(totals.planned)}</span>
+        <span className="foot-total">{formatMoney(totals.spent)}</span>
+        <span className="foot-total pad">{formatMoney(totalRemaining)}</span>
+        <span />
+      </div>
     </div>
   );
 }
@@ -587,6 +787,9 @@ function TransactionPanel({
   unassignOver,
   setUnassignOver,
   onUnassignDrop,
+  onSync,
+  syncing,
+  txStatus,
   saveState,
 }) {
   const list = txTab === 'new' ? newTxns : trackedTxns;
@@ -614,10 +817,17 @@ function TransactionPanel({
       )}
       <div className="txpanel-head">
         <span className="txpanel-title">Transactions</span>
+        <button className="txsync" onClick={onSync} disabled={syncing}>
+          {syncing ? 'Syncing…' : 'Sync'}
+        </button>
+      </div>
+      <div className="txpanel-sub">
         <span className="save-state">
           {saveState === 'saving' ? 'Saving…' : saveState === 'error' ? 'Save failed' : 'All changes saved'}
         </span>
       </div>
+
+      {txStatus && <div className="txstatus">{txStatus}</div>}
 
       <div className="txtabs">
         <button className={`txtab ${txTab === 'new' ? 'active' : ''}`} onClick={() => setTxTab('new')}>

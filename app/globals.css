@@ -306,6 +306,67 @@ input {
   border-color: var(--blue);
   background: #fff;
 }
+
+/* Click-to-edit money cell — plain text until clicked, with a hover affordance */
+.moneycell {
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 15px;
+  font-family: inherit;
+  text-align: right;
+  width: 100%;
+  color: var(--navy);
+  background: transparent;
+  cursor: text;
+}
+.moneycell:hover {
+  background: #f6f7f9;
+  border-color: var(--border-strong);
+}
+.moneycell:focus-visible {
+  outline: none;
+  border-color: var(--blue);
+}
+
+/* Drag handles for reordering */
+.grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 22px;
+  color: var(--text-3);
+  cursor: grab;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.grip:active {
+  cursor: grabbing;
+}
+.grip-spacer {
+  width: 16px;
+  flex-shrink: 0;
+}
+.group-head:hover .grip,
+.line:hover .grip {
+  opacity: 1;
+}
+.line-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Reorder drop indicators */
+.line.reorder-over {
+  box-shadow: inset 0 2px 0 0 var(--blue);
+}
+.group.cat-over {
+  box-shadow: 0 0 0 2px var(--blue);
+}
 .remaining {
   text-align: right;
   font-size: 15px;
@@ -392,8 +453,37 @@ input {
   font-weight: 800;
   color: var(--navy);
 }
+.txsync {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 700;
+  border-radius: 7px;
+  padding: 5px 12px;
+}
+.txsync:hover:not(:disabled) {
+  background: var(--blue-light);
+  border-color: var(--blue);
+}
+.txsync:disabled {
+  color: var(--text-3);
+  cursor: default;
+}
+.txpanel-sub {
+  padding: 0 18px 8px;
+}
 .txpanel .save-state {
   color: var(--text-3);
+}
+.txstatus {
+  margin: 0 18px 8px;
+  background: var(--blue-light);
+  color: var(--blue-dark);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.4;
 }
 .txtabs {
   display: flex;
