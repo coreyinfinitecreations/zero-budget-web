@@ -14,7 +14,9 @@ import {
   getMonthKey,
   latestMonthBefore,
   newId,
+  normalizeBudgets,
   normalizeVendor,
+  roundMoney,
   shiftMonth,
 } from '../../lib/budget';
 
@@ -32,7 +34,7 @@ function deriveCategories(budgets, month) {
 
 // Normalize a Plaid (server) transaction into the panel's common shape.
 function fromPlaid(t) {
-  const amount = Math.abs(Number(t.amount) || 0);
+  const amount = roundMoney(Math.abs(Number(t.amount) || 0));
   return {
     id: t.id,
     vendor: t.merchant_name || t.name || 'Transaction',
@@ -84,7 +86,7 @@ export default function BudgetPage() {
         const { data: remote } = await stateApi.get();
         if (active) {
           setDoc({
-            budgets: remote?.budgets || {},
+            budgets: normalizeBudgets(remote?.budgets || {}),
             goals: remote?.goals || [],
             transactions: remote?.transactions || [],
             assignedPlaidTxIds: remote?.assignedPlaidTxIds || [],
@@ -241,7 +243,7 @@ export default function BudgetPage() {
                   String(i.id) === String(itemId)
                     ? {
                         ...i,
-                        spent: (Number(i.spent) || 0) + tx.amount,
+                        spent: roundMoney((Number(i.spent) || 0) + tx.amount),
                         plaidTxIds:
                           tx.source === 'plaid'
                             ? [...(i.plaidTxIds || []), tx.id]
@@ -305,7 +307,7 @@ export default function BudgetPage() {
                     String(i.id) === String(target.itemId)
                       ? {
                           ...i,
-                          spent: Math.max(0, (Number(i.spent) || 0) - tx.amount),
+                          spent: Math.max(0, roundMoney((Number(i.spent) || 0) - tx.amount)),
                           plaidTxIds: (i.plaidTxIds || []).filter((id) => id !== tx.id),
                         }
                       : i
@@ -346,6 +348,69 @@ export default function BudgetPage() {
     [doc.vendorMemory, categories]
   );
 
+  // Archive (soft-delete) a transaction. Manual → deleted; Plaid → dismissed
+  // (added to assignedPlaidTxIds so it leaves the New tray). If it was assigned
+  // to a budget item, its amount is removed from that item's Spent.
+  const archiveTransaction = useCallback(
+    (tx) => {
+      setDoc((prev) => {
+        if (tx.source === 'plaid') {
+          return {
+            ...prev,
+            assignedPlaidTxIds: [...new Set([...(prev.assignedPlaidTxIds || []), tx.id])],
+          };
+        }
+        const month = currentMonth;
+        const budgets = { ...(prev.budgets || {}) };
+        const t = (prev.transactions || []).find((x) => x.id === tx.id);
+        if (t?.tracked && t.assignedTo) {
+          const current = budgets[month] || deriveCategories(prev.budgets, month);
+          budgets[month] = current.map((c) =>
+            c.id === t.assignedTo.categoryId
+              ? {
+                  ...c,
+                  items: c.items.map((i) =>
+                    String(i.id) === String(t.assignedTo.itemId)
+                      ? { ...i, spent: Math.max(0, roundMoney((Number(i.spent) || 0) - (Number(tx.amount) || 0))) }
+                      : i
+                  ),
+                }
+              : c
+          );
+        }
+        const transactions = (prev.transactions || []).map((x) =>
+          x.id === tx.id ? { ...x, deleted: true, tracked: false, assignedTo: null } : x
+        );
+        return { ...prev, budgets, transactions };
+      });
+    },
+    [currentMonth]
+  );
+
+  const archiveMany = useCallback(
+    (txList) => {
+      txList.forEach((tx) => archiveTransaction(tx));
+    },
+    [archiveTransaction]
+  );
+
+  const restoreTransaction = useCallback((tx) => {
+    setDoc((prev) => {
+      if (tx.source === 'plaid') {
+        return {
+          ...prev,
+          assignedPlaidTxIds: (prev.assignedPlaidTxIds || []).filter((id) => id !== tx.id),
+        };
+      }
+      return {
+        ...prev,
+        transactions: (prev.transactions || []).map((x) =>
+          x.id === tx.id ? { ...x, deleted: false } : x
+        ),
+      };
+    });
+  }, []);
+
   async function signOut() {
     await supabase.auth.signOut();
     router.replace('/login');
@@ -372,34 +437,49 @@ export default function BudgetPage() {
   }, []);
 
   // ── Transaction lists for the panel ──────────────────────────────────────────
+  // "Handled" Plaid ids (assigned to an item OR dismissed/archived).
   const assignedPlaidSet = useMemo(
     () => new Set(doc.assignedPlaidTxIds || []),
     [doc.assignedPlaidTxIds]
   );
+  // Plaid ids actually assigned to a budget item (a subset of the above).
+  const assignedItemTxIds = useMemo(() => {
+    const s = new Set();
+    categories.forEach((c) => c.items.forEach((i) => (i.plaidTxIds || []).forEach((id) => s.add(id))));
+    return s;
+  }, [categories]);
 
-  const manualTxns = useMemo(
-    () => (doc.transactions || []).filter((t) => !t.deleted).map((t) => ({ ...t, source: 'manual' })),
+  const allManual = useMemo(
+    () => (doc.transactions || []).map((t) => ({ ...t, source: 'manual' })),
     [doc.transactions]
   );
-
-  const allPanelTxns = useMemo(
-    () =>
-      [...manualTxns, ...plaidTxns].sort((a, b) => new Date(b.date) - new Date(a.date)),
-    [manualTxns, plaidTxns]
+  const allTxns = useMemo(
+    () => [...allManual, ...plaidTxns].sort((a, b) => new Date(b.date) - new Date(a.date)),
+    [allManual, plaidTxns]
   );
 
   const newTxns = useMemo(
     () =>
-      allPanelTxns.filter((t) =>
-        t.source === 'plaid' ? !assignedPlaidSet.has(t.id) : !t.tracked
+      allTxns.filter((t) =>
+        t.source === 'plaid' ? !assignedPlaidSet.has(t.id) : !t.tracked && !t.deleted
       ),
-    [allPanelTxns, assignedPlaidSet]
+    [allTxns, assignedPlaidSet]
   );
 
   const trackedTxns = useMemo(
     () =>
-      allPanelTxns.filter((t) => (t.source === 'plaid' ? assignedPlaidSet.has(t.id) : t.tracked)),
-    [allPanelTxns, assignedPlaidSet]
+      allTxns.filter((t) =>
+        t.source === 'plaid' ? assignedItemTxIds.has(t.id) : t.tracked && !t.deleted
+      ),
+    [allTxns, assignedItemTxIds]
+  );
+
+  const archivedTxns = useMemo(
+    () =>
+      allTxns.filter((t) =>
+        t.source === 'plaid' ? assignedPlaidSet.has(t.id) && !assignedItemTxIds.has(t.id) : t.deleted
+      ),
+    [allTxns, assignedPlaidSet, assignedItemTxIds]
   );
 
   // txId → assigned item name (for the Tracked tab labels)
@@ -541,10 +621,14 @@ export default function BudgetPage() {
         setTxTab={setTxTab}
         newTxns={newTxns}
         trackedTxns={trackedTxns}
+        archivedTxns={archivedTxns}
         assignmentNameMap={assignmentNameMap}
         getVendorSuggestion={getVendorSuggestion}
         onQuickAssign={(tx, s) => assignTransaction(tx, s.categoryId, s.itemId)}
         onUnassign={unassignTransaction}
+        onArchive={archiveTransaction}
+        onArchiveMany={archiveMany}
+        onRestore={restoreTransaction}
         onDragStartTx={startDrag}
         onDragEndTx={endDrag}
         draggingAssigned={!!dragInfo?.assigned}
@@ -589,7 +673,7 @@ function EditableMoney({ value, onCommit }) {
   }, [editing]);
 
   const commit = () => {
-    onCommit(Number(draft) || 0);
+    onCommit(roundMoney(Number(draft) || 0));
     setEditing(false);
   };
 
@@ -772,15 +856,40 @@ function GroupCard({
   );
 }
 
+function TrashIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+      <path d="M10 11v6M14 11v6" />
+    </svg>
+  );
+}
+
+// Group transactions into month buckets, newest month first.
+function groupByMonth(txns) {
+  const map = {};
+  txns.forEach((t) => {
+    const d = new Date(t.date);
+    const label = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    if (!map[label]) map[label] = { label, sort: new Date(d.getFullYear(), d.getMonth(), 1).getTime(), items: [] };
+    map[label].items.push(t);
+  });
+  return Object.values(map).sort((a, b) => b.sort - a.sort);
+}
+
 function TransactionPanel({
   txTab,
   setTxTab,
   newTxns,
   trackedTxns,
+  archivedTxns,
   assignmentNameMap,
   getVendorSuggestion,
   onQuickAssign,
   onUnassign,
+  onArchive,
+  onArchiveMany,
+  onRestore,
   onDragStartTx,
   onDragEndTx,
   draggingAssigned,
@@ -792,7 +901,40 @@ function TransactionPanel({
   txStatus,
   saveState,
 }) {
-  const list = txTab === 'new' ? newTxns : trackedTxns;
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
+
+  const list = txTab === 'new' ? newTxns : txTab === 'tracked' ? trackedTxns : archivedTxns;
+  const groups = useMemo(() => groupByMonth(list), [list]);
+
+  // Reset selection when switching tabs.
+  useEffect(() => {
+    setSelectMode(false);
+    setSelected(new Set());
+  }, [txTab]);
+
+  const keyOf = (tx) => `${tx.source}:${tx.id}`;
+  const toggleSel = (tx) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const k = keyOf(tx);
+      next.has(k) ? next.delete(k) : next.add(k);
+      return next;
+    });
+  const exitSelect = () => {
+    setSelectMode(false);
+    setSelected(new Set());
+  };
+  const archiveSelected = () => {
+    onArchiveMany(list.filter((t) => selected.has(keyOf(t))));
+    exitSelect();
+  };
+  const archiveMonth = (group) => {
+    if (window.confirm(`Archive all ${group.items.length} transaction(s) in ${group.label}?`)) {
+      onArchiveMany(group.items);
+    }
+  };
+
   return (
     <aside
       className="txpanel"
@@ -836,11 +978,38 @@ function TransactionPanel({
         <button className={`txtab ${txTab === 'tracked' ? 'active' : ''}`} onClick={() => setTxTab('tracked')}>
           Tracked ({trackedTxns.length})
         </button>
+        <button className={`txtab ${txTab === 'archived' ? 'active' : ''}`} onClick={() => setTxTab('archived')}>
+          Archived ({archivedTxns.length})
+        </button>
       </div>
 
-      {txTab === 'new' ? (
-        <p className="txhint">Drag a transaction onto a budget item to assign it, or use Quick assign.</p>
-      ) : (
+      {txTab === 'new' && (
+        <div className="txtoolbar">
+          {!selectMode ? (
+            <>
+              <span className="txhint inline">Drag onto a budget item, or use Quick assign.</span>
+              {list.length > 0 && (
+                <button className="txtool" onClick={() => setSelectMode(true)}>
+                  Select
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              <button className="txtool" onClick={() => setSelected(new Set(list.map(keyOf)))}>
+                Select all
+              </button>
+              <button className="txtool danger" disabled={selected.size === 0} onClick={archiveSelected}>
+                Archive ({selected.size})
+              </button>
+              <button className="txtool" onClick={exitSelect}>
+                Cancel
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      {txTab === 'tracked' && (
         <p className="txhint">Drag onto a different item to reassign, or back into this panel to unassign.</p>
       )}
 
@@ -849,56 +1018,117 @@ function TransactionPanel({
           <div className="txempty">
             {txTab === 'new'
               ? 'Nothing to assign. Connect a bank in Accounts or add a manual transaction.'
-              : 'No assigned transactions yet.'}
+              : txTab === 'tracked'
+                ? 'No assigned transactions yet.'
+                : 'No archived transactions.'}
           </div>
         )}
 
-        {list.map((tx) => {
-          const suggestion = txTab === 'new' ? getVendorSuggestion(tx.vendor) : null;
-          const d = new Date(tx.date);
-          const mon = d.toLocaleDateString('en-US', { month: 'short' });
-          const day = d.getDate();
-          return (
-            <div
-              key={`${tx.source}:${tx.id}`}
-              className="txrow"
-              draggable
-              onDragStart={() => onDragStartTx(tx, txTab === 'tracked')}
-              onDragEnd={onDragEndTx}
-            >
-              <div className={`txdate ${tx.source === 'plaid' ? 'bank' : 'manual'}`}>
-                <span className="m">{mon}</span>
-                <span className="d">{day}</span>
-              </div>
-              <div className="txmid">
-                <div className="txvendor">{tx.vendor}</div>
-                <div className="txsub">
-                  {txTab === 'tracked'
-                    ? `→ ${assignmentNameMap[tx.id] || 'Tracked'}`
-                    : tx.source === 'plaid'
-                      ? 'Bank · Unassigned'
-                      : 'Manual · Unassigned'}
-                </div>
-                {suggestion && (
-                  <button className="quick-assign" onClick={() => onQuickAssign(tx, suggestion)}>
-                    Quick assign → {suggestion.itemName || suggestion.categoryName}
-                  </button>
-                )}
-              </div>
-              <div className="txright">
-                <span className={`txamt ${tx.type === 'income' ? 'pos' : ''}`}>
-                  {tx.type === 'income' ? '+' : '-'}
-                  {formatMoneyCents(tx.amount)}
-                </span>
-                {txTab === 'tracked' && (
-                  <button className="txunassign" onClick={() => onUnassign(tx)} title="Unassign">
-                    Unassign
-                  </button>
-                )}
-              </div>
+        {groups.map((group) => (
+          <div className="txgroup" key={group.label}>
+            <div className="txgroup-head">
+              <span className="txgroup-label">
+                {group.label} · {group.items.length}
+              </span>
+              {txTab === 'new' && !selectMode && (
+                <button className="txgroup-action" onClick={() => archiveMonth(group)}>
+                  Archive all
+                </button>
+              )}
             </div>
-          );
-        })}
+
+            {group.items.map((tx) => {
+              const suggestion = txTab === 'new' && !selectMode ? getVendorSuggestion(tx.vendor) : null;
+              const d = new Date(tx.date);
+              const mon = d.toLocaleDateString('en-US', { month: 'short' });
+              const day = d.getDate();
+              const k = keyOf(tx);
+              const checked = selected.has(k);
+              const isIncome = tx.type === 'income';
+              return (
+                <div
+                  key={k}
+                  className={`txrow${selectMode ? ' selectable' : ''}${checked ? ' selected' : ''}`}
+                  draggable={!selectMode && txTab !== 'archived'}
+                  onDragStart={() => onDragStartTx(tx, txTab === 'tracked')}
+                  onDragEnd={onDragEndTx}
+                  onClick={selectMode ? () => toggleSel(tx) : undefined}
+                >
+                  {selectMode && <input type="checkbox" className="txcheck" checked={checked} readOnly />}
+                  <div className={`txdate ${isIncome ? 'income' : 'expense'}`}>
+                    <span className="m">{mon}</span>
+                    <span className="d">{day}</span>
+                  </div>
+                  <div className="txmid">
+                    <div className="txvendor">{tx.vendor}</div>
+                    <div className="txsub">
+                      {txTab === 'tracked'
+                        ? `→ ${assignmentNameMap[tx.id] || 'Tracked'}`
+                        : txTab === 'archived'
+                          ? 'Archived'
+                          : tx.source === 'plaid'
+                            ? 'Bank · Unassigned'
+                            : 'Manual · Unassigned'}
+                    </div>
+                    {suggestion && (
+                      <button
+                        className="quick-assign"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onQuickAssign(tx, suggestion);
+                        }}
+                      >
+                        Quick assign → {suggestion.itemName || suggestion.categoryName}
+                      </button>
+                    )}
+                  </div>
+                  <div className="txright">
+                    <span className={`txamt ${isIncome ? 'pos' : ''}`}>
+                      {isIncome ? '+' : '-'}
+                      {formatMoneyCents(tx.amount)}
+                    </span>
+                    {!selectMode && txTab === 'new' && (
+                      <button
+                        className="txicon"
+                        title="Archive"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onArchive(tx);
+                        }}
+                      >
+                        <TrashIcon />
+                      </button>
+                    )}
+                    {!selectMode && txTab === 'tracked' && (
+                      <button
+                        className="txunassign"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onUnassign(tx);
+                        }}
+                        title="Unassign"
+                      >
+                        Unassign
+                      </button>
+                    )}
+                    {!selectMode && txTab === 'archived' && (
+                      <button
+                        className="txunassign"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRestore(tx);
+                        }}
+                        title="Restore"
+                      >
+                        Restore
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ))}
       </div>
     </aside>
   );
