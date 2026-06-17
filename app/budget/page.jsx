@@ -64,6 +64,7 @@ export default function BudgetPage() {
   const [newCatName, setNewCatName] = useState('');
   const [selectedItem, setSelectedItem] = useState(null); // { catId, itemId }
   const [confirmDeleteCat, setConfirmDeleteCat] = useState(null); // { id, name }
+  const [editMode, setEditMode] = useState(false);
   const [txTab, setTxTab] = useState('new'); // 'new' | 'tracked'
   const [txStatus, setTxStatus] = useState('');
   const [syncing, setSyncing] = useState(false);
@@ -664,6 +665,21 @@ export default function BudgetPage() {
               </div>
             </div>
             <div className="month-nav">
+              <button
+                className={`navbtn edit ${editMode ? 'active' : ''}`}
+                onClick={() => setEditMode((e) => !e)}
+                aria-pressed={editMode}
+                title={editMode ? 'Done editing' : 'Edit categories'}
+              >
+                {editMode ? (
+                  'Done'
+                ) : (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M12 20h9" />
+                    <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                  </svg>
+                )}
+              </button>
               <button className="navbtn" onClick={() => setCurrentMonth((m) => shiftMonth(m, -1))} aria-label="Previous month">
                 ‹
               </button>
@@ -685,6 +701,7 @@ export default function BudgetPage() {
               setReorderOver={setReorderOver}
               selectedItemKey={selectedItem ? `${selectedItem.catId}:${selectedItem.itemId}` : null}
               onSelectItem={(catId, itemId) => setSelectedItem({ catId, itemId })}
+              editMode={editMode}
               onStartItemReorder={startReorder}
               onStartCategoryReorder={startReorder}
               onEndReorder={endReorder}
@@ -889,6 +906,7 @@ function GroupCard({
   setReorderOver,
   selectedItemKey,
   onSelectItem,
+  editMode,
 }) {
   const isIncome = cat.type === 'income';
   const middleLabel = isIncome ? 'Received' : 'Spent';
@@ -907,7 +925,7 @@ function GroupCard({
 
   return (
     <div
-      className={`group${catOver ? ' cat-over' : ''}`}
+      className={`group${catOver ? ' cat-over' : ''}${editMode ? ' edit' : ''}`}
       onDragOver={(e) => {
         if (catReorderTarget) {
           e.preventDefault();
@@ -923,9 +941,7 @@ function GroupCard({
     >
       <div className="group-head">
         <div className="group-name">
-          {isIncome ? (
-            <span className="grip-spacer" />
-          ) : (
+          {editMode && !isIncome && (
             <span
               className="grip"
               draggable
@@ -937,8 +953,8 @@ function GroupCard({
             </span>
           )}
           <input value={cat.name} onChange={(e) => onRename(e.target.value)} />
-          {!isIncome && (
-            <button className="del" onClick={onDelete} title="Delete group">
+          {editMode && !isIncome && (
+            <button className="del" onClick={onDelete} title="Delete category">
               ×
             </button>
           )}
