@@ -299,7 +299,9 @@ export default function BudgetPage() {
           tx.source === 'plaid'
             ? prev.transactions || []
             : (prev.transactions || []).map((t) =>
-                t.id === tx.id ? { ...t, tracked: true, assignedTo: { categoryId, itemId } } : t
+                t.id === tx.id
+                  ? { ...t, tracked: true, deleted: false, assignedTo: { categoryId, itemId } }
+                  : t
               );
 
         const assignedPlaidTxIds =
@@ -1312,6 +1314,9 @@ function TransactionPanel({
       {txTab === 'tracked' && (
         <p className="txhint">Drag onto a different item to reassign, or back into this panel to unassign.</p>
       )}
+      {txTab === 'archived' && (
+        <p className="txhint">Drag onto a budget item to assign, or use Restore to send it back to New.</p>
+      )}
 
       <div className="txlist">
         {txLoading && (
@@ -1355,7 +1360,7 @@ function TransactionPanel({
                 <div
                   key={k}
                   className={`txrow${selectMode ? ' selectable' : ''}${checked ? ' selected' : ''}`}
-                  draggable={!selectMode && txTab !== 'archived'}
+                  draggable={!selectMode}
                   onDragStart={() => onDragStartTx(tx, txTab === 'tracked')}
                   onDragEnd={onDragEndTx}
                   onClick={selectMode ? () => toggleSel(tx) : undefined}
