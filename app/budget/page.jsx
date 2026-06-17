@@ -999,7 +999,11 @@ function GroupCard({
             </div>
             <EditableMoney value={item.planned ?? 0} onCommit={(v) => onUpdateItem(item.id, 'planned', v)} />
             <EditableMoney value={item.spent ?? 0} onCommit={(v) => onUpdateItem(item.id, 'spent', v)} />
-            <span className={`remaining ${remaining < 0 ? 'neg' : ''}`}>{formatMoney(remaining)}</span>
+            {isIncome && remaining < 0 ? (
+              <span className="remaining pos">+{formatMoney(Math.abs(remaining))}</span>
+            ) : (
+              <span className={`remaining ${remaining < 0 ? 'neg' : ''}`}>{formatMoney(remaining)}</span>
+            )}
             <button
               className="del"
               onClick={(e) => {
@@ -1020,7 +1024,11 @@ function GroupCard({
         </button>
         <span className="foot-total">{formatMoney(totals.planned)}</span>
         <span className="foot-total">{formatMoney(totals.spent)}</span>
-        <span className="foot-total pad">{formatMoney(totalRemaining)}</span>
+        {isIncome && totalRemaining < 0 ? (
+          <span className="foot-total pad pos">+{formatMoney(Math.abs(totalRemaining))}</span>
+        ) : (
+          <span className="foot-total pad">{formatMoney(totalRemaining)}</span>
+        )}
         <span />
       </div>
     </div>
@@ -1049,7 +1057,12 @@ function ItemDetailPanel({ detailItem, detailTxns, onClose, onUpdate, onUnassign
           onChange={(e) => onUpdate('name', e.target.value)}
         />
         <div className="detail-remaining">
-          <span className={`amt ${remaining < 0 ? 'neg' : 'pos'}`}>{formatMoney(remaining)}</span> remaining
+          {isIncome && remaining < 0 ? (
+            <span className="amt pos">+{formatMoney(Math.abs(remaining))}</span>
+          ) : (
+            <span className={`amt ${remaining < 0 ? 'neg' : 'pos'}`}>{formatMoney(remaining)}</span>
+          )}{' '}
+          remaining
         </div>
         <div className="detail-sub">
           {formatMoneyCents(spent)} {isIncome ? 'received' : 'spent'} of {formatMoneyCents(planned)}

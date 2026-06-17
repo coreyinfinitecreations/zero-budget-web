@@ -455,6 +455,9 @@ input {
 .remaining.neg {
   color: var(--danger);
 }
+.remaining.pos {
+  color: var(--green-dark);
+}
 .del {
   border: none;
   background: transparent;
@@ -495,6 +498,9 @@ input {
 }
 .foot-total.pad {
   padding-right: 10px;
+}
+.foot-total.pos {
+  color: var(--green-dark);
 }
 
 /* ============ Drag-and-drop line states ============ */
