@@ -358,6 +358,307 @@ input {
   padding-right: 10px;
 }
 
+/* ============ Drag-and-drop line states ============ */
+.line.droppable {
+  outline: 1px dashed transparent;
+}
+.line.dragover {
+  background: var(--blue-light);
+  outline: 2px dashed var(--blue);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+
+/* ============ Transactions panel ============ */
+.txpanel {
+  width: 340px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+.txpanel-head {
+  padding: 18px 18px 10px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.txpanel-title {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--navy);
+}
+.txpanel .save-state {
+  color: var(--text-3);
+}
+.txtabs {
+  display: flex;
+  gap: 8px;
+  padding: 0 18px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.txtab {
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 700;
+  padding: 6px 4px;
+  border-bottom: 2px solid transparent;
+}
+.txtab.active {
+  color: var(--blue);
+  border-bottom-color: var(--blue);
+}
+.txhint {
+  font-size: 12px;
+  color: var(--text-3);
+  padding: 10px 18px 0;
+  margin: 0;
+  line-height: 1.4;
+}
+.txdropzone {
+  margin: 10px 12px 0;
+  border: 2px dashed var(--border-strong);
+  border-radius: 8px;
+  padding: 14px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-2);
+  background: #f6f7f9;
+}
+.txdropzone.over {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: #fdecea;
+}
+.txlist {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px 24px;
+}
+.txempty {
+  color: var(--text-3);
+  font-size: 13px;
+  text-align: center;
+  padding: 40px 16px;
+  line-height: 1.5;
+}
+.txrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 8px;
+  border-radius: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.txrow[draggable='true'] {
+  cursor: grab;
+}
+.txrow[draggable='true']:hover {
+  background: #f6f7f9;
+}
+.txrow[draggable='true']:active {
+  cursor: grabbing;
+}
+.txdate {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.txdate.bank {
+  background: var(--blue);
+}
+.txdate.manual {
+  background: var(--navy);
+}
+.txdate .m {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.txdate .d {
+  font-size: 15px;
+  font-weight: 700;
+}
+.txmid {
+  flex: 1;
+  min-width: 0;
+}
+.txvendor {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.txsub {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-top: 1px;
+}
+.quick-assign {
+  margin-top: 5px;
+  border: 1px solid var(--blue);
+  background: var(--blue-light);
+  color: var(--blue-dark);
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 3px 10px;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.quick-assign:hover {
+  background: var(--blue);
+  color: #fff;
+}
+.txright {
+  text-align: right;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.txamt {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+.txamt.pos {
+  color: var(--green-dark);
+}
+.txunassign {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0;
+}
+.txunassign:hover {
+  color: var(--danger);
+  text-decoration: underline;
+}
+
+/* ============ Accounts page ============ */
+.acct-status {
+  background: var(--blue-light);
+  color: var(--blue-dark);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 14px;
+  margin-bottom: 18px;
+}
+.acct-section {
+  margin-bottom: 24px;
+}
+.acct-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 4px 10px;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-3);
+}
+.acct-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.acct-row:last-child {
+  border-bottom: none;
+}
+.acct-mark {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  color: #fff;
+  font-weight: 800;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.acct-mark.bank {
+  background: var(--blue);
+}
+.acct-mark.manual {
+  background: var(--navy);
+}
+.acct-mid {
+  flex: 1;
+  min-width: 0;
+}
+.acct-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--navy);
+}
+.acct-sub {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-top: 1px;
+}
+.acct-right {
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.acct-bal {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--navy);
+}
+.acct-empty {
+  color: var(--text-3);
+  font-size: 14px;
+  padding: 22px 18px;
+  line-height: 1.5;
+}
+.acct-form {
+  padding: 16px;
+  margin-bottom: 12px;
+}
+.acct-form .field {
+  margin-bottom: 10px;
+}
+.acct-form-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.acct-form-row .field {
+  margin-bottom: 0;
+}
+.acct-form-row .btn {
+  flex-shrink: 0;
+}
+
 /* ============ Buttons ============ */
 .btn {
   background: var(--blue);
@@ -491,7 +792,7 @@ input {
 }
 
 /* ============ Responsive ============ */
-@media (max-width: 820px) {
+@media (max-width: 1024px) {
   .app-shell {
     flex-direction: column;
   }
@@ -515,6 +816,20 @@ input {
   .sidebar-foot {
     border-top: none;
     border-left: 1px solid var(--border);
+  }
+}
+
+@media (max-width: 1024px) {
+  .txpanel {
+    position: static;
+    width: 100%;
+    height: auto;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    order: 3;
+  }
+  .txlist {
+    max-height: 60vh;
   }
 }
 

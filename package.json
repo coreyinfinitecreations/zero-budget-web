@@ -11,6 +11,7 @@
     "@supabase/supabase-js": "^2.47.10",
     "next": "^14.2.0",
     "react": "^18.3.0",
-    "react-dom": "^18.3.0"
+    "react-dom": "^18.3.0",
+    "react-plaid-link": "^3.6.1"
   }
 }
