@@ -29,8 +29,35 @@ function deriveCategories(budgets, month) {
   const source = prevKey ? budgets[prevKey] : DEFAULT_CATEGORIES;
   return source.map((cat) => ({
     ...cat,
-    items: (cat.items || []).map((i) => ({ ...i, spent: 0, plaidTxIds: [] })),
+    items: (cat.items || []).map((i) => {
+      // Due dates only carry into the next month when "repeat monthly" is on
+      // (default on, so existing items keep their schedule).
+      const repeat = i.repeatMonthly !== false;
+      return {
+        ...i,
+        spent: 0,
+        plaidTxIds: [],
+        cashflowDates: repeat ? i.cashflowDates || [] : [],
+        dueDate: repeat ? i.dueDate || null : null,
+      };
+    }),
   }));
+}
+
+// 1 -> "1st", 2 -> "2nd", etc.
+function ordinal(n) {
+  const s = ['th', 'st', 'nd', 'rd'];
+  const v = n % 100;
+  return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
+}
+
+// Due day-of-month list for an item (new cashflowDates model, else legacy dueDate).
+function dueDaysOf(item) {
+  if (item.cashflowDates && item.cashflowDates.length) {
+    return [...item.cashflowDates].sort((a, b) => a - b);
+  }
+  if (item.dueDate) return [new Date(item.dueDate).getDate()];
+  return [];
 }
 
 // Normalize a Plaid (server) transaction into the panel's common shape.
@@ -778,6 +805,7 @@ export default function BudgetPage() {
         saveState={saveState}
         detailItem={detailItem}
         detailTxns={detailTxns}
+        currentMonth={currentMonth}
         onCloseDetail={() => setSelectedItem(null)}
         onUpdateDetail={updateDetailField}
         onDeleteDetailItem={deleteDetailItem}
@@ -967,6 +995,7 @@ function GroupCard({
 
       {cat.items.map((item) => {
         const remaining = (Number(item.planned) || 0) - (Number(item.spent) || 0);
+        const dueDays = dueDaysOf(item);
         const key = `${cat.id}:${item.id}`;
         const txOver = isDragging && dragOverKey === key;
         const itemReorderTarget = reorderKind === 'item';
@@ -1007,13 +1036,16 @@ function GroupCard({
               >
                 <Grip />
               </span>
-              <input
-                className="name"
-                placeholder="Add item name"
-                value={item.name}
-                onClick={(e) => e.stopPropagation()}
-                onChange={(e) => onUpdateItem(item.id, 'name', e.target.value)}
-              />
+              <span className="line-open">
+                <span className={`line-itemname ${item.name ? '' : 'placeholder'}`}>
+                  {item.name || 'Untitled — tap to edit'}
+                </span>
+                {dueDays.length > 0 && (
+                  <span className="line-due">
+                    {isIncome ? 'Expected' : 'Due'} {dueDays.map(ordinal).join(', ')}
+                  </span>
+                )}
+              </span>
             </div>
             <EditableMoney value={item.planned ?? 0} onCommit={(v) => onUpdateItem(item.id, 'planned', v)} />
             <EditableMoney value={item.spent ?? 0} onCommit={(v) => onUpdateItem(item.id, 'spent', v)} />
@@ -1053,12 +1085,76 @@ function GroupCard({
   );
 }
 
-function ItemDetailPanel({ detailItem, detailTxns, onClose, onUpdate, onUnassign, onDelete }) {
+function CalendarPicker({ currentMonth, item, isIncome, onUpdate }) {
+  const [y, m] = String(currentMonth || '').split('-').map(Number);
+  const year = y || new Date().getFullYear();
+  const month = m || new Date().getMonth() + 1; // 1-based
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const firstWeekday = new Date(year, month - 1, 1).getDay();
+  const monthLabel = new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+  const selected = item.cashflowDates && item.cashflowDates.length
+    ? [...item.cashflowDates].sort((a, b) => a - b)
+    : item.dueDate
+      ? [new Date(item.dueDate).getDate()]
+      : [];
+  const repeat = item.repeatMonthly !== false;
+
+  const apply = (days) => {
+    const sorted = [...new Set(days)].filter((d) => d >= 1 && d <= 31).sort((a, b) => a - b);
+    onUpdate('cashflowDates', sorted);
+    onUpdate('dueDate', sorted.length ? new Date(year, month - 1, sorted[0]).toISOString() : null);
+  };
+  const toggleDay = (d) => apply(selected.includes(d) ? selected.filter((x) => x !== d) : [...selected, d]);
+
+  const cells = [];
+  for (let i = 0; i < firstWeekday; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+  return (
+    <div className="cal">
+      <div className="cal-month">{monthLabel}</div>
+      <div className="cal-grid cal-weekdays">
+        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((w, i) => (
+          <span key={i} className="cal-wd">{w}</span>
+        ))}
+      </div>
+      <div className="cal-grid">
+        {cells.map((d, i) =>
+          d === null ? (
+            <span key={`b${i}`} className="cal-cell empty" />
+          ) : (
+            <button
+              key={d}
+              type="button"
+              className={`cal-cell ${selected.includes(d) ? 'on' : ''}`}
+              onClick={() => toggleDay(d)}
+            >
+              {d}
+            </button>
+          )
+        )}
+      </div>
+      <label className="cal-repeat">
+        <input type="checkbox" checked={repeat} onChange={(e) => onUpdate('repeatMonthly', e.target.checked)} />
+        Repeat monthly
+      </label>
+      <div className="cal-summary">
+        {selected.length === 0
+          ? `Pick the day(s) this ${isIncome ? 'income arrives' : 'is due'}.`
+          : repeat
+            ? `Repeats on the ${selected.map(ordinal).join(', ')} each month.`
+            : `${monthLabel} only — won’t carry to next month.`}
+      </div>
+    </div>
+  );
+}
+
+function ItemDetailPanel({ detailItem, detailTxns, currentMonth, onClose, onUpdate, onUnassign, onDelete }) {
   const { item, isIncome } = detailItem;
   const planned = Number(item.planned) || 0;
   const spent = Number(item.spent) || 0;
   const remaining = planned - spent;
-  const dueValue = item.dueDate ? new Date(item.dueDate).toISOString().slice(0, 10) : '';
 
   return (
     <aside className="txpanel">
@@ -1095,15 +1191,8 @@ function ItemDetailPanel({ detailItem, detailTxns, onClose, onUpdate, onUnassign
           onChange={(e) => onUpdate('planned', roundMoney(Number(e.target.value) || 0))}
         />
 
-        <label className="detail-label">{isIncome ? 'Expected date' : 'Due date'}</label>
-        <input
-          className="detail-input"
-          type="date"
-          value={dueValue}
-          onChange={(e) =>
-            onUpdate('dueDate', e.target.value ? new Date(`${e.target.value}T00:00:00`).toISOString() : null)
-          }
-        />
+        <label className="detail-label">{isIncome ? 'Expected dates' : 'Due dates'}</label>
+        <CalendarPicker currentMonth={currentMonth} item={item} isIncome={isIncome} onUpdate={onUpdate} />
 
         <label className="detail-label">Note</label>
         <textarea
@@ -1201,6 +1290,7 @@ function TransactionPanel({
   saveState,
   detailItem,
   detailTxns,
+  currentMonth,
   onCloseDetail,
   onUpdateDetail,
   onDeleteDetailItem,
@@ -1223,6 +1313,7 @@ function TransactionPanel({
       <ItemDetailPanel
         detailItem={detailItem}
         detailTxns={detailTxns}
+        currentMonth={currentMonth}
         onClose={onCloseDetail}
         onUpdate={onUpdateDetail}
         onUnassign={onUnassign}
