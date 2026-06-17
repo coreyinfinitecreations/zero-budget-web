@@ -16,6 +16,7 @@ import {
   newId,
   normalizeBudgets,
   normalizeVendor,
+  reconcileTransactions,
   roundMoney,
   shiftMonth,
 } from '../../lib/budget';
@@ -66,6 +67,7 @@ export default function BudgetPage() {
   const [txTab, setTxTab] = useState('new'); // 'new' | 'tracked'
   const [txStatus, setTxStatus] = useState('');
   const [syncing, setSyncing] = useState(false);
+  const [txLoading, setTxLoading] = useState(true);
   const [dragOverKey, setDragOverKey] = useState(null);
   const [dragInfo, setDragInfo] = useState(null); // { assigned } while dragging — drives highlights
   const [unassignOver, setUnassignOver] = useState(false);
@@ -89,10 +91,11 @@ export default function BudgetPage() {
       try {
         const { data: remote } = await stateApi.get();
         if (active) {
+          const budgets = normalizeBudgets(remote?.budgets || {});
           setDoc({
-            budgets: normalizeBudgets(remote?.budgets || {}),
+            budgets,
             goals: remote?.goals || [],
-            transactions: remote?.transactions || [],
+            transactions: reconcileTransactions(budgets, remote?.transactions || []),
             assignedPlaidTxIds: remote?.assignedPlaidTxIds || [],
             vendorMemory: remote?.vendorMemory || {},
             userName: remote?.userName || '',
@@ -109,6 +112,7 @@ export default function BudgetPage() {
       }
       // Pull server-stored (Plaid-synced) transactions; if banks are connected,
       // trigger a fresh sync first so newly-posted transactions appear.
+      if (active) setTxLoading(true);
       try {
         const { accounts } = await accountsApi.list();
         if (accounts?.length) {
@@ -124,6 +128,8 @@ export default function BudgetPage() {
         }
       } catch (e) {
         if (active) setTxStatus(`Couldn’t load bank transactions: ${e.message}`);
+      } finally {
+        if (active) setTxLoading(false);
       }
     })();
     return () => {
@@ -748,6 +754,7 @@ export default function BudgetPage() {
         onUnassignDrop={handleUnassignDrop}
         onSync={syncNow}
         syncing={syncing}
+        txLoading={txLoading}
         txStatus={txStatus}
         saveState={saveState}
         detailItem={detailItem}
@@ -1158,6 +1165,7 @@ function TransactionPanel({
   onUnassignDrop,
   onSync,
   syncing,
+  txLoading,
   txStatus,
   saveState,
   detailItem,
@@ -1169,6 +1177,16 @@ function TransactionPanel({
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
 
+  const list = txTab === 'new' ? newTxns : txTab === 'tracked' ? trackedTxns : archivedTxns;
+  const groups = useMemo(() => groupByMonth(list), [list]);
+
+  // Reset selection when switching tabs.
+  useEffect(() => {
+    setSelectMode(false);
+    setSelected(new Set());
+  }, [txTab]);
+
+  // All hooks above this line — only return the detail view after they've run.
   if (detailItem) {
     return (
       <ItemDetailPanel
@@ -1181,15 +1199,6 @@ function TransactionPanel({
       />
     );
   }
-
-  const list = txTab === 'new' ? newTxns : txTab === 'tracked' ? trackedTxns : archivedTxns;
-  const groups = useMemo(() => groupByMonth(list), [list]);
-
-  // Reset selection when switching tabs.
-  useEffect(() => {
-    setSelectMode(false);
-    setSelected(new Set());
-  }, [txTab]);
 
   const keyOf = (tx) => `${tx.source}:${tx.id}`;
   const toggleSel = (tx) =>
@@ -1292,7 +1301,13 @@ function TransactionPanel({
       )}
 
       <div className="txlist">
-        {list.length === 0 && (
+        {txLoading && (
+          <div className="txloading">
+            <span className="spinner" aria-hidden="true" />
+            Loading transactions…
+          </div>
+        )}
+        {!txLoading && list.length === 0 && (
           <div className="txempty">
             {txTab === 'new'
               ? 'Nothing to assign. Connect a bank in Accounts or add a manual transaction.'
