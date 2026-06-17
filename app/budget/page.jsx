@@ -59,6 +59,10 @@ export default function BudgetPage() {
   const [plaidTxns, setPlaidTxns] = useState([]);
   const [currentMonth, setCurrentMonth] = useState(getMonthKey(new Date()));
   const [saveState, setSaveState] = useState('saved'); // 'saved' | 'saving' | 'error'
+  const [addingCat, setAddingCat] = useState(false);
+  const [newCatName, setNewCatName] = useState('');
+  const [selectedItem, setSelectedItem] = useState(null); // { catId, itemId }
+  const [confirmDeleteCat, setConfirmDeleteCat] = useState(null); // { id, name }
   const [txTab, setTxTab] = useState('new'); // 'new' | 'tracked'
   const [txStatus, setTxStatus] = useState('');
   const [syncing, setSyncing] = useState(false);
@@ -114,7 +118,7 @@ export default function BudgetPage() {
             if (active) setTxStatus(`Couldn’t sync from your bank: ${e.message}`);
           }
         }
-        const { transactions } = await transactionsApi.list({ limit: 250 });
+        const { transactions } = await transactionsApi.list({ limit: 500 });
         if (active && Array.isArray(transactions)) {
           setPlaidTxns(transactions.filter((t) => t.source === 'plaid').map(fromPlaid));
         }
@@ -183,15 +187,45 @@ export default function BudgetPage() {
   const renameCategory = (catId, name) =>
     setCategories((cats) => cats.map((c) => (c.id === catId ? { ...c, name } : c)));
 
-  const deleteCategory = (catId) => setCategories((cats) => cats.filter((c) => c.id !== catId));
+  // Delete a category and release every transaction tracked to its items back
+  // to the untracked (New) list — manual ones lose their assignment, Plaid ones
+  // leave the assigned/dismissed set.
+  const deleteCategory = (catId) => {
+    setDoc((prev) => {
+      const month = currentMonth;
+      const budgets = { ...(prev.budgets || {}) };
+      const current = budgets[month] || deriveCategories(prev.budgets, month);
+      const cat = current.find((c) => c.id === catId);
+      const releasedPlaid = new Set();
+      (cat?.items || []).forEach((i) => (i.plaidTxIds || []).forEach((id) => releasedPlaid.add(id)));
 
-  const addCategory = () => {
-    const name = window.prompt('New group name');
-    if (!name || !name.trim()) return;
+      budgets[month] = current.filter((c) => c.id !== catId);
+
+      const transactions = (prev.transactions || []).map((t) =>
+        t.tracked && t.assignedTo && t.assignedTo.categoryId === catId
+          ? { ...t, tracked: false, assignedTo: null }
+          : t
+      );
+      const assignedPlaidTxIds = (prev.assignedPlaidTxIds || []).filter((id) => !releasedPlaid.has(id));
+
+      return { ...prev, budgets, transactions, assignedPlaidTxIds };
+    });
+  };
+
+  const addCategory = (name) => {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return;
     setCategories((cats) => [
       ...cats,
-      { id: newId('cat'), name: name.trim(), type: 'expense', targetPercent: 5, items: [] },
+      { id: newId('cat'), name: trimmed, type: 'expense', targetPercent: 5, items: [] },
     ]);
+  };
+
+  const submitNewCategory = (e) => {
+    e.preventDefault();
+    addCategory(newCatName);
+    setNewCatName('');
+    setAddingCat(false);
   };
 
   // Reorder items within a single category.
@@ -427,7 +461,7 @@ export default function BudgetPage() {
         return;
       }
       await plaidApi.syncTransactions();
-      const { transactions } = await transactionsApi.list({ limit: 250 });
+      const { transactions } = await transactionsApi.list({ limit: 500 });
       setPlaidTxns((transactions || []).filter((t) => t.source === 'plaid').map(fromPlaid));
     } catch (e) {
       setTxStatus(`Sync failed: ${e.message}`);
@@ -481,6 +515,50 @@ export default function BudgetPage() {
       ),
     [allTxns, assignedPlaidSet, assignedItemTxIds]
   );
+
+  // ── Selected budget item (detail view) ───────────────────────────────────────
+  const detailItem = useMemo(() => {
+    if (!selectedItem) return null;
+    const cat = categories.find((c) => c.id === selectedItem.catId);
+    const item = cat?.items.find((i) => String(i.id) === String(selectedItem.itemId));
+    if (!cat || !item) return null;
+    return { catId: cat.id, isIncome: cat.type === 'income', item };
+  }, [selectedItem, categories]);
+
+  const detailTxns = useMemo(() => {
+    if (!detailItem) return [];
+    const { catId, item } = detailItem;
+    const manual = (doc.transactions || [])
+      .filter(
+        (t) =>
+          t.tracked &&
+          !t.deleted &&
+          t.assignedTo &&
+          t.assignedTo.categoryId === catId &&
+          String(t.assignedTo.itemId) === String(item.id)
+      )
+      .map((t) => ({ ...t, source: 'manual' }));
+    const plaid = (item.plaidTxIds || [])
+      .map((id) => plaidTxns.find((t) => t.id === id))
+      .filter(Boolean);
+    return [...manual, ...plaid].sort((a, b) => new Date(b.date) - new Date(a.date));
+  }, [detailItem, doc.transactions, plaidTxns]);
+
+  const updateDetailField = useCallback(
+    (field, value) => {
+      if (!selectedItem) return;
+      updateItem(selectedItem.catId, selectedItem.itemId, field, value);
+    },
+    [selectedItem]
+  );
+
+  const deleteDetailItem = useCallback(() => {
+    if (!selectedItem) return;
+    if (window.confirm('Delete this budget item? This cannot be undone.')) {
+      deleteItem(selectedItem.catId, selectedItem.itemId);
+      setSelectedItem(null);
+    }
+  }, [selectedItem]);
 
   // txId → assigned item name (for the Tracked tab labels)
   const assignmentNameMap = useMemo(() => {
@@ -597,22 +675,55 @@ export default function BudgetPage() {
               reorderKind={reorderKind}
               reorderOver={reorderOver}
               setReorderOver={setReorderOver}
+              selectedItemKey={selectedItem ? `${selectedItem.catId}:${selectedItem.itemId}` : null}
+              onSelectItem={(catId, itemId) => setSelectedItem({ catId, itemId })}
               onStartItemReorder={startReorder}
               onStartCategoryReorder={startReorder}
               onEndReorder={endReorder}
               onDropCategory={handleDropOnCategory}
               onDropItem={handleDropOnItem}
               onRename={(name) => renameCategory(cat.id, name)}
-              onDelete={() => deleteCategory(cat.id)}
+              onDelete={() => setConfirmDeleteCat({ id: cat.id, name: cat.name })}
               onAddItem={() => addItem(cat.id)}
               onUpdateItem={(itemId, field, value) => updateItem(cat.id, itemId, field, value)}
               onDeleteItem={(itemId) => deleteItem(cat.id, itemId)}
             />
           ))}
 
-          <button className="btn ghost" onClick={addCategory}>
-            + Add group
-          </button>
+          {addingCat ? (
+            <form className="addcat" onSubmit={submitNewCategory}>
+              <input
+                className="addcat-name"
+                autoFocus
+                placeholder="Category name (e.g. Insurance)"
+                value={newCatName}
+                onChange={(e) => setNewCatName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    setAddingCat(false);
+                    setNewCatName('');
+                  }
+                }}
+              />
+              <button className="btn" type="submit" disabled={!newCatName.trim()}>
+                Add
+              </button>
+              <button
+                type="button"
+                className="btn ghost addcat-cancel"
+                onClick={() => {
+                  setAddingCat(false);
+                  setNewCatName('');
+                }}
+              >
+                Cancel
+              </button>
+            </form>
+          ) : (
+            <button className="btn ghost" onClick={() => setAddingCat(true)}>
+              + Add category
+            </button>
+          )}
         </div>
       </main>
 
@@ -639,7 +750,45 @@ export default function BudgetPage() {
         syncing={syncing}
         txStatus={txStatus}
         saveState={saveState}
+        detailItem={detailItem}
+        detailTxns={detailTxns}
+        onCloseDetail={() => setSelectedItem(null)}
+        onUpdateDetail={updateDetailField}
+        onDeleteDetailItem={deleteDetailItem}
       />
+
+      {confirmDeleteCat && (
+        <ConfirmModal
+          title="Delete category?"
+          message={`“${confirmDeleteCat.name}” and all of its items will be removed. Any transactions tracked to those items will return to your Transactions list as untracked.`}
+          confirmLabel="Delete category"
+          onCancel={() => setConfirmDeleteCat(null)}
+          onConfirm={() => {
+            deleteCategory(confirmDeleteCat.id);
+            if (selectedItem?.catId === confirmDeleteCat.id) setSelectedItem(null);
+            setConfirmDeleteCat(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function ConfirmModal({ title, message, confirmLabel = 'Delete', onConfirm, onCancel }) {
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <h3 className="modal-title">{title}</h3>
+        <p className="modal-msg">{message}</p>
+        <div className="modal-actions">
+          <button className="btn ghost modal-cancel" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="btn modal-danger" onClick={onConfirm}>
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -685,6 +834,7 @@ function EditableMoney({ value, onCommit }) {
         type="number"
         inputMode="decimal"
         value={draft}
+        onClick={(e) => e.stopPropagation()}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => {
@@ -699,7 +849,8 @@ function EditableMoney({ value, onCommit }) {
     <button
       type="button"
       className="moneycell"
-      onClick={() => {
+      onClick={(e) => {
+        e.stopPropagation();
         setDraft(String(value ?? 0));
         setEditing(true);
       }}
@@ -727,6 +878,8 @@ function GroupCard({
   reorderKind,
   reorderOver,
   setReorderOver,
+  selectedItemKey,
+  onSelectItem,
 }) {
   const isIncome = cat.type === 'income';
   const middleLabel = isIncome ? 'Received' : 'Spent';
@@ -793,10 +946,12 @@ function GroupCard({
         const txOver = isDragging && dragOverKey === key;
         const itemReorderTarget = reorderKind === 'item';
         const itemOver = itemReorderTarget && reorderOver === key;
+        const isSelected = selectedItemKey === key;
         return (
           <div
-            className={`line${isDragging ? ' droppable' : ''}${txOver ? ' dragover' : ''}${itemOver ? ' reorder-over' : ''}`}
+            className={`line clickable${isDragging ? ' droppable' : ''}${txOver ? ' dragover' : ''}${itemOver ? ' reorder-over' : ''}${isSelected ? ' selected' : ''}`}
             key={item.id}
+            onClick={() => onSelectItem(cat.id, item.id)}
             onDragOver={(e) => {
               if (itemReorderTarget) {
                 e.preventDefault();
@@ -820,6 +975,7 @@ function GroupCard({
               <span
                 className="grip"
                 draggable
+                onClick={(e) => e.stopPropagation()}
                 onDragStart={() => onStartItemReorder('item', cat.id, item.id)}
                 onDragEnd={onEndReorder}
                 title="Drag to reorder"
@@ -830,13 +986,21 @@ function GroupCard({
                 className="name"
                 placeholder="Add item name"
                 value={item.name}
+                onClick={(e) => e.stopPropagation()}
                 onChange={(e) => onUpdateItem(item.id, 'name', e.target.value)}
               />
             </div>
             <EditableMoney value={item.planned ?? 0} onCommit={(v) => onUpdateItem(item.id, 'planned', v)} />
             <EditableMoney value={item.spent ?? 0} onCommit={(v) => onUpdateItem(item.id, 'spent', v)} />
             <span className={`remaining ${remaining < 0 ? 'neg' : ''}`}>{formatMoney(remaining)}</span>
-            <button className="del" onClick={() => onDeleteItem(item.id)} title="Remove">
+            <button
+              className="del"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDeleteItem(item.id);
+              }}
+              title="Remove"
+            >
               ×
             </button>
           </div>
@@ -853,6 +1017,102 @@ function GroupCard({
         <span />
       </div>
     </div>
+  );
+}
+
+function ItemDetailPanel({ detailItem, detailTxns, onClose, onUpdate, onUnassign, onDelete }) {
+  const { item, isIncome } = detailItem;
+  const planned = Number(item.planned) || 0;
+  const spent = Number(item.spent) || 0;
+  const remaining = planned - spent;
+  const dueValue = item.dueDate ? new Date(item.dueDate).toISOString().slice(0, 10) : '';
+
+  return (
+    <aside className="txpanel">
+      <div className="detail-head">
+        <button className="detail-back" onClick={onClose}>
+          ‹ Budget
+        </button>
+      </div>
+      <div className="detail-body">
+        <input
+          className="detail-title"
+          value={item.name}
+          placeholder="Item name"
+          onChange={(e) => onUpdate('name', e.target.value)}
+        />
+        <div className="detail-remaining">
+          <span className={`amt ${remaining < 0 ? 'neg' : 'pos'}`}>{formatMoney(remaining)}</span> remaining
+        </div>
+        <div className="detail-sub">
+          {formatMoneyCents(spent)} {isIncome ? 'received' : 'spent'} of {formatMoneyCents(planned)}
+        </div>
+
+        <label className="detail-label">Planned</label>
+        <input
+          className="detail-input"
+          type="number"
+          inputMode="decimal"
+          value={item.planned ?? 0}
+          onChange={(e) => onUpdate('planned', roundMoney(Number(e.target.value) || 0))}
+        />
+
+        <label className="detail-label">{isIncome ? 'Expected date' : 'Due date'}</label>
+        <input
+          className="detail-input"
+          type="date"
+          value={dueValue}
+          onChange={(e) =>
+            onUpdate('dueDate', e.target.value ? new Date(`${e.target.value}T00:00:00`).toISOString() : null)
+          }
+        />
+
+        <label className="detail-label">Note</label>
+        <textarea
+          className="detail-note"
+          value={item.note || ''}
+          placeholder="Add a note"
+          onChange={(e) => onUpdate('note', e.target.value)}
+        />
+
+        <div className="detail-section-head">Assigned transactions ({detailTxns.length})</div>
+        {detailTxns.length === 0 ? (
+          <div className="txempty">Drag a transaction onto this item to track it here.</div>
+        ) : (
+          detailTxns.map((tx) => {
+            const d = new Date(tx.date);
+            const mon = d.toLocaleDateString('en-US', { month: 'short' });
+            const day = d.getDate();
+            const isInc = tx.type === 'income';
+            return (
+              <div className="txrow" key={`${tx.source}:${tx.id}`}>
+                <div className={`txdate ${isInc ? 'income' : 'expense'}`}>
+                  <span className="m">{mon}</span>
+                  <span className="d">{day}</span>
+                </div>
+                <div className="txmid">
+                  <div className="txvendor">{tx.vendor}</div>
+                  <div className="txsub">{tx.source === 'plaid' ? 'Bank' : 'Manual'}</div>
+                </div>
+                <div className="txright">
+                  <span className={`txamt ${isInc ? 'pos' : ''}`}>
+                    {isInc ? '+' : '-'}
+                    {formatMoneyCents(tx.amount)}
+                  </span>
+                  <button className="txunassign" onClick={() => onUnassign(tx)} title="Remove from this item">
+                    Remove
+                  </button>
+                </div>
+              </div>
+            );
+          })
+        )}
+
+        <button className="detail-delete" onClick={onDelete}>
+          Delete budget item
+        </button>
+      </div>
+    </aside>
   );
 }
 
@@ -900,9 +1160,27 @@ function TransactionPanel({
   syncing,
   txStatus,
   saveState,
+  detailItem,
+  detailTxns,
+  onCloseDetail,
+  onUpdateDetail,
+  onDeleteDetailItem,
 }) {
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
+
+  if (detailItem) {
+    return (
+      <ItemDetailPanel
+        detailItem={detailItem}
+        detailTxns={detailTxns}
+        onClose={onCloseDetail}
+        onUpdate={onUpdateDetail}
+        onUnassign={onUnassign}
+        onDelete={onDeleteDetailItem}
+      />
+    );
+  }
 
   const list = txTab === 'new' ? newTxns : txTab === 'tracked' ? trackedTxns : archivedTxns;
   const groups = useMemo(() => groupByMonth(list), [list]);

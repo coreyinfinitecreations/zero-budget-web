@@ -1,6 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
+import ThemeToggle from './ThemeToggle';
 
 function LogoMark({ size = 30 }) {
   return (
@@ -52,6 +53,10 @@ export default function Sidebar({ active, email, onSignOut }) {
           Accounts
         </button>
       </nav>
+
+      <div className="sidebar-theme">
+        <ThemeToggle />
+      </div>
 
       <div className="sidebar-foot">
         <div className="avatar">{initials}</div>
