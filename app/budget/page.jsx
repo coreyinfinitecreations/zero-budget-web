@@ -27,6 +27,16 @@ function deriveCategories(budgets, month) {
   if (budgets?.[month]) return budgets[month];
   const prevKey = latestMonthBefore(budgets, month);
   const source = prevKey ? budgets[prevKey] : DEFAULT_CATEGORIES;
+  // Rebase a carried-forward due date into the target month: keep the
+  // day-of-month (the 5th, the 15th, …) but move it to `month`'s month/year,
+  // clamping to the month's length (31st → 30th in June).
+  const [ty, tm] = month.split('-').map(Number);
+  const daysInTarget = new Date(ty, tm, 0).getDate();
+  const rebaseDueDate = (iso) => {
+    if (!iso) return null;
+    const day = Math.min(new Date(iso).getDate(), daysInTarget);
+    return new Date(ty, tm - 1, day).toISOString();
+  };
   return source.map((cat) => ({
     ...cat,
     items: (cat.items || []).map((i) => {
@@ -38,7 +48,7 @@ function deriveCategories(budgets, month) {
         spent: 0,
         plaidTxIds: [],
         cashflowDates: repeat ? i.cashflowDates || [] : [],
-        dueDate: repeat ? i.dueDate || null : null,
+        dueDate: repeat ? rebaseDueDate(i.dueDate) : null,
       };
     }),
   }));
@@ -91,6 +101,7 @@ export default function BudgetPage() {
   const [newCatName, setNewCatName] = useState('');
   const [selectedItem, setSelectedItem] = useState(null); // { catId, itemId }
   const [confirmDeleteCat, setConfirmDeleteCat] = useState(null); // { id, name }
+  const [confirmDeleteMonth, setConfirmDeleteMonth] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [txTab, setTxTab] = useState('new'); // 'new' | 'tracked'
   const [txStatus, setTxStatus] = useState('');
@@ -152,7 +163,7 @@ export default function BudgetPage() {
         }
         const { transactions } = await transactionsApi.list({ limit: 500 });
         if (active && Array.isArray(transactions)) {
-          setPlaidTxns(transactions.filter((t) => t.source === 'plaid').map(fromPlaid));
+          setPlaidTxns(transactions.filter((t) => t.source === 'plaid' && !t.pending).map(fromPlaid));
         }
       } catch (e) {
         if (active) setTxStatus(`Couldn’t load bank transactions: ${e.message}`);
@@ -178,8 +189,71 @@ export default function BudgetPage() {
     return () => clearTimeout(handle);
   }, [doc]);
 
-  const categories = doc.budgets?.[currentMonth] || deriveCategories(doc.budgets, currentMonth);
+  // A month only has a budget once the user explicitly sets it up (copy the
+  // previous month or start fresh) — until then, show the setup screen.
+  const monthInitialized = !!doc.budgets?.[currentMonth];
+  const prevMonthKey = latestMonthBefore(doc.budgets, currentMonth);
+  const categories = doc.budgets?.[currentMonth] || [];
   const totals = useMemo(() => computeTotals(categories, doc.goals), [categories, doc.goals]);
+
+  // ── Month setup / teardown ──────────────────────────────────────────────────
+  // Materialize this month by carrying the most recent prior month forward
+  // (planned amounts kept, spent reset — see deriveCategories).
+  const startMonthFromPrevious = () => {
+    setDoc((prev) => ({
+      ...prev,
+      budgets: {
+        ...(prev.budgets || {}),
+        [currentMonth]: deriveCategories(prev.budgets, currentMonth),
+      },
+    }));
+  };
+
+  // Materialize this month from the default template (no items).
+  const startMonthFresh = () => {
+    setDoc((prev) => ({
+      ...prev,
+      budgets: {
+        ...(prev.budgets || {}),
+        [currentMonth]: DEFAULT_CATEGORIES.map((c) => ({ ...c, items: [] })),
+      },
+    }));
+  };
+
+  // Delete this month's budget entirely. Plaid txns assigned to its items are
+  // released back to New, and manual txns tracked to items that no longer exist
+  // in any remaining month become untracked. The month returns to the setup
+  // screen (copy previous month or start fresh).
+  const deleteMonthBudget = () => {
+    setDoc((prev) => {
+      const budgets = { ...(prev.budgets || {}) };
+      const current = budgets[currentMonth] || [];
+      const releasedPlaid = new Set();
+      current.forEach((c) =>
+        (c.items || []).forEach((i) => (i.plaidTxIds || []).forEach((id) => releasedPlaid.add(id)))
+      );
+      delete budgets[currentMonth];
+
+      // Item ids repeat across carried-forward months, so only release manual
+      // assignments whose category:item no longer exists in ANY remaining month.
+      const valid = new Set();
+      Object.values(budgets).forEach((cats) =>
+        (cats || []).forEach((c) => (c.items || []).forEach((i) => valid.add(`${c.id}:${i.id}`)))
+      );
+      const transactions = (prev.transactions || []).map((t) =>
+        t.tracked && t.assignedTo && !valid.has(`${t.assignedTo.categoryId}:${t.assignedTo.itemId}`)
+          ? { ...t, tracked: false, assignedTo: null }
+          : t
+      );
+      const assignedPlaidTxIds = (prev.assignedPlaidTxIds || []).filter(
+        (id) => !releasedPlaid.has(id)
+      );
+
+      return { ...prev, budgets, transactions, assignedPlaidTxIds };
+    });
+    setSelectedItem(null);
+    setEditMode(false);
+  };
 
   // Write an update to the current month's categories (materializing the month).
   const setCategories = useCallback(
@@ -498,7 +572,7 @@ export default function BudgetPage() {
       }
       await plaidApi.syncTransactions();
       const { transactions } = await transactionsApi.list({ limit: 500 });
-      setPlaidTxns((transactions || []).filter((t) => t.source === 'plaid').map(fromPlaid));
+      setPlaidTxns((transactions || []).filter((t) => t.source === 'plaid' && !t.pending).map(fromPlaid));
     } catch (e) {
       setTxStatus(`Sync failed: ${e.message}`);
     } finally {
@@ -684,29 +758,42 @@ export default function BudgetPage() {
               <h1 className="month-title">
                 <strong>{monthName}</strong> {yearNum}
               </h1>
-              <div className="left-to-budget">
-                <span className={`amt ${totals.remaining < 0 ? 'neg' : 'pos'}`}>
-                  {formatMoney(totals.remaining)}
-                </span>{' '}
-                left to budget
-              </div>
+              {monthInitialized && (
+                <div className="left-to-budget">
+                  <span className={`amt ${totals.remaining < 0 ? 'neg' : 'pos'}`}>
+                    {formatMoney(totals.remaining)}
+                  </span>{' '}
+                  left to budget
+                </div>
+              )}
             </div>
             <div className="month-nav">
-              <button
-                className={`navbtn edit ${editMode ? 'active' : ''}`}
-                onClick={() => setEditMode((e) => !e)}
-                aria-pressed={editMode}
-                title={editMode ? 'Done editing' : 'Edit categories'}
-              >
-                {editMode ? (
-                  'Done'
-                ) : (
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M12 20h9" />
-                    <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
-                  </svg>
-                )}
-              </button>
+              {monthInitialized && editMode && (
+                <button
+                  className="navbtn month-delete"
+                  onClick={() => setConfirmDeleteMonth(true)}
+                  title="Delete this month's budget"
+                >
+                  Delete budget
+                </button>
+              )}
+              {monthInitialized && (
+                <button
+                  className={`navbtn edit ${editMode ? 'active' : ''}`}
+                  onClick={() => setEditMode((e) => !e)}
+                  aria-pressed={editMode}
+                  title={editMode ? 'Done editing' : 'Edit categories'}
+                >
+                  {editMode ? (
+                    'Done'
+                  ) : (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M12 20h9" />
+                      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                    </svg>
+                  )}
+                </button>
+              )}
               <button className="navbtn" onClick={() => setCurrentMonth((m) => shiftMonth(m, -1))} aria-label="Previous month">
                 ‹
               </button>
@@ -716,7 +803,16 @@ export default function BudgetPage() {
             </div>
           </div>
 
-          {[...incomeCats, ...expenseCats].map((cat) => (
+          {!monthInitialized && (
+            <MonthSetup
+              monthLabel={formatMonthLabel(currentMonth)}
+              prevMonthKey={prevMonthKey}
+              onCopyPrevious={startMonthFromPrevious}
+              onStartFresh={startMonthFresh}
+            />
+          )}
+
+          {monthInitialized && [...incomeCats, ...expenseCats].map((cat) => (
             <GroupCard
               key={cat.id}
               cat={cat}
@@ -742,7 +838,7 @@ export default function BudgetPage() {
             />
           ))}
 
-          {addingCat ? (
+          {!monthInitialized ? null : addingCat ? (
             <form className="addcat" onSubmit={submitNewCategory}>
               <input
                 className="addcat-name"
@@ -811,6 +907,19 @@ export default function BudgetPage() {
         onDeleteDetailItem={deleteDetailItem}
       />
 
+      {confirmDeleteMonth && (
+        <ConfirmModal
+          title="Delete this month's budget?"
+          message={`The ${formatMonthLabel(currentMonth)} budget and all of its categories and items will be removed. Transactions tracked to those items will return to your Transactions list as untracked. You can then copy a previous month's budget or start fresh.`}
+          confirmLabel="Delete budget"
+          onCancel={() => setConfirmDeleteMonth(false)}
+          onConfirm={() => {
+            deleteMonthBudget();
+            setConfirmDeleteMonth(false);
+          }}
+        />
+      )}
+
       {confirmDeleteCat && (
         <ConfirmModal
           title="Delete category?"
@@ -824,6 +933,33 @@ export default function BudgetPage() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+// Shown when the selected month has no saved budget yet: choose to carry the
+// previous month's items forward or start from the default template.
+function MonthSetup({ monthLabel, prevMonthKey, onCopyPrevious, onStartFresh }) {
+  return (
+    <div className="month-setup">
+      <h2 className="setup-title">Set up your {monthLabel} budget</h2>
+      <p className="setup-sub">This month doesn’t have a budget yet. How would you like to start?</p>
+      <div className="setup-options">
+        {prevMonthKey && (
+          <button className="setup-option" onClick={onCopyPrevious}>
+            <span className="so-title">Copy {formatMonthLabel(prevMonthKey)}</span>
+            <span className="so-desc">
+              Carry over your categories, items, and planned amounts. Spent starts at $0.
+            </span>
+          </button>
+        )}
+        <button className="setup-option" onClick={onStartFresh}>
+          <span className="so-title">Start fresh</span>
+          <span className="so-desc">
+            Begin with the default category template and build this month from scratch.
+          </span>
+        </button>
+      </div>
     </div>
   );
 }

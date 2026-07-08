@@ -305,6 +305,69 @@ input {
   border-color: var(--blue);
   color: var(--blue);
 }
+.navbtn.month-delete {
+  width: auto;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--danger);
+}
+.navbtn.month-delete:hover {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* ============ Month setup (no budget saved for this month yet) ============ */
+.month-setup {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 40px 28px;
+  text-align: center;
+}
+.setup-title {
+  margin: 0 0 6px;
+  font-size: 20px;
+  color: var(--navy);
+}
+.setup-sub {
+  margin: 0 0 24px;
+  font-size: 14px;
+  color: var(--text-2);
+}
+.setup-options {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.setup-option {
+  flex: 1 1 220px;
+  max-width: 300px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  padding: 20px 18px;
+  text-align: center;
+}
+.setup-option:hover {
+  background: var(--blue-light);
+  border-color: var(--blue);
+}
+.setup-option .so-title {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--blue);
+}
+.setup-option .so-desc {
+  display: block;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
 
 /* ============ Budget group card ============ */
 .group {
