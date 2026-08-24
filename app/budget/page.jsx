@@ -5,9 +5,12 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabase';
 import { accountsApi, plaidApi, stateApi, transactionsApi } from '../../lib/api';
 import Sidebar from '../../components/Sidebar';
+import TopLoadingBar from '../../components/TopLoadingBar';
 import {
   DEFAULT_CATEGORIES,
   computeTotals,
+  deriveCategories,
+  dueDaysOf,
   formatMoney,
   formatMoneyCents,
   formatMonthLabel,
@@ -21,53 +24,11 @@ import {
   shiftMonth,
 } from '../../lib/budget';
 
-// Derive the categories to show for a month: its saved budget, else carry the
-// most recent prior month forward (spent reset), else the default template.
-function deriveCategories(budgets, month) {
-  if (budgets?.[month]) return budgets[month];
-  const prevKey = latestMonthBefore(budgets, month);
-  const source = prevKey ? budgets[prevKey] : DEFAULT_CATEGORIES;
-  // Rebase a carried-forward due date into the target month: keep the
-  // day-of-month (the 5th, the 15th, …) but move it to `month`'s month/year,
-  // clamping to the month's length (31st → 30th in June).
-  const [ty, tm] = month.split('-').map(Number);
-  const daysInTarget = new Date(ty, tm, 0).getDate();
-  const rebaseDueDate = (iso) => {
-    if (!iso) return null;
-    const day = Math.min(new Date(iso).getDate(), daysInTarget);
-    return new Date(ty, tm - 1, day).toISOString();
-  };
-  return source.map((cat) => ({
-    ...cat,
-    items: (cat.items || []).map((i) => {
-      // Due dates only carry into the next month when "repeat monthly" is on
-      // (default on, so existing items keep their schedule).
-      const repeat = i.repeatMonthly !== false;
-      return {
-        ...i,
-        spent: 0,
-        plaidTxIds: [],
-        cashflowDates: repeat ? i.cashflowDates || [] : [],
-        dueDate: repeat ? rebaseDueDate(i.dueDate) : null,
-      };
-    }),
-  }));
-}
-
 // 1 -> "1st", 2 -> "2nd", etc.
 function ordinal(n) {
   const s = ['th', 'st', 'nd', 'rd'];
   const v = n % 100;
   return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
-}
-
-// Due day-of-month list for an item (new cashflowDates model, else legacy dueDate).
-function dueDaysOf(item) {
-  if (item.cashflowDates && item.cashflowDates.length) {
-    return [...item.cashflowDates].sort((a, b) => a - b);
-  }
-  if (item.dueDate) return [new Date(item.dueDate).getDate()];
-  return [];
 }
 
 // Normalize a Plaid (server) transaction into the panel's common shape.
@@ -690,11 +651,9 @@ export default function BudgetPage() {
     return map;
   }, [categories, doc.transactions]);
 
-  if (!ready) return <div className="center-note">Loading your budget…</div>;
-
-  const incomeCats = categories.filter((c) => c.type === 'income');
-  const expenseCats = categories.filter((c) => c.type === 'expense');
-  const [monthName, yearNum] = formatMonthLabel(currentMonth).split(' ');
+  const incomeCats = ready ? categories.filter((c) => c.type === 'income') : [];
+  const expenseCats = ready ? categories.filter((c) => c.type === 'expense') : [];
+  const [monthName, yearNum] = ready ? formatMonthLabel(currentMonth).split(' ') : ['', ''];
 
   const endDrag = () => {
     draggingRef.current = null;
@@ -753,6 +712,10 @@ export default function BudgetPage() {
 
       <main className="main">
         <div className="content has-panel">
+          {!ready ? (
+            <TopLoadingBar />
+          ) : (
+            <>
           <div className="month-head">
             <div>
               <h1 className="month-title">
@@ -872,40 +835,44 @@ export default function BudgetPage() {
               + Add category
             </button>
           )}
+            </>
+          )}
         </div>
       </main>
 
-      <TransactionPanel
-        txTab={txTab}
-        setTxTab={setTxTab}
-        newTxns={newTxns}
-        trackedTxns={trackedTxns}
-        archivedTxns={archivedTxns}
-        assignmentNameMap={assignmentNameMap}
-        getVendorSuggestion={getVendorSuggestion}
-        onQuickAssign={(tx, s) => assignTransaction(tx, s.categoryId, s.itemId)}
-        onUnassign={unassignTransaction}
-        onArchive={archiveTransaction}
-        onArchiveMany={archiveMany}
-        onRestore={restoreTransaction}
-        onDragStartTx={startDrag}
-        onDragEndTx={endDrag}
-        draggingAssigned={!!dragInfo?.assigned}
-        unassignOver={unassignOver}
-        setUnassignOver={setUnassignOver}
-        onUnassignDrop={handleUnassignDrop}
-        onSync={syncNow}
-        syncing={syncing}
-        txLoading={txLoading}
-        txStatus={txStatus}
-        saveState={saveState}
-        detailItem={detailItem}
-        detailTxns={detailTxns}
-        currentMonth={currentMonth}
-        onCloseDetail={() => setSelectedItem(null)}
-        onUpdateDetail={updateDetailField}
-        onDeleteDetailItem={deleteDetailItem}
-      />
+      {ready && (
+        <TransactionPanel
+          txTab={txTab}
+          setTxTab={setTxTab}
+          newTxns={newTxns}
+          trackedTxns={trackedTxns}
+          archivedTxns={archivedTxns}
+          assignmentNameMap={assignmentNameMap}
+          getVendorSuggestion={getVendorSuggestion}
+          onQuickAssign={(tx, s) => assignTransaction(tx, s.categoryId, s.itemId)}
+          onUnassign={unassignTransaction}
+          onArchive={archiveTransaction}
+          onArchiveMany={archiveMany}
+          onRestore={restoreTransaction}
+          onDragStartTx={startDrag}
+          onDragEndTx={endDrag}
+          draggingAssigned={!!dragInfo?.assigned}
+          unassignOver={unassignOver}
+          setUnassignOver={setUnassignOver}
+          onUnassignDrop={handleUnassignDrop}
+          onSync={syncNow}
+          syncing={syncing}
+          txLoading={txLoading}
+          txStatus={txStatus}
+          saveState={saveState}
+          detailItem={detailItem}
+          detailTxns={detailTxns}
+          currentMonth={currentMonth}
+          onCloseDetail={() => setSelectedItem(null)}
+          onUpdateDetail={updateDetailField}
+          onDeleteDetailItem={deleteDetailItem}
+        />
+      )}
 
       {confirmDeleteMonth && (
         <ConfirmModal

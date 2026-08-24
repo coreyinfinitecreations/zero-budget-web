@@ -7,6 +7,7 @@ import { supabase } from '../../lib/supabase';
 import { accountsApi, manualAccountsApi, plaidApi } from '../../lib/api';
 import { formatMoneyCents } from '../../lib/budget';
 import Sidebar from '../../components/Sidebar';
+import TopLoadingBar from '../../components/TopLoadingBar';
 
 // Renders nothing visible — when given a link token it opens Plaid Link
 // automatically and reports success/exit back to the parent.
@@ -138,8 +139,6 @@ export default function AccountsPage() {
     loadAccounts();
   }
 
-  if (!ready) return <div className="center-note">Loading your accounts…</div>;
-
   const totalBalance =
     connected.reduce((s, a) => s + (Number(a.balance) || 0), 0) +
     manual.reduce((s, a) => s + (Number(a.balance) || 0), 0);
@@ -152,6 +151,10 @@ export default function AccountsPage() {
 
       <main className="main">
         <div className="content">
+          {!ready ? (
+            <TopLoadingBar />
+          ) : (
+            <>
           <div className="month-head">
             <div>
               <h1 className="month-title">
@@ -267,6 +270,8 @@ export default function AccountsPage() {
               )}
             </div>
           </div>
+            </>
+          )}
         </div>
       </main>
     </div>

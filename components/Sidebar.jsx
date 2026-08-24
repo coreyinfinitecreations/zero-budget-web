@@ -32,6 +32,15 @@ function AccountsIcon() {
   );
 }
 
+function CashflowIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 17l5-5 4 4 8-9" />
+      <path d="M14 7h6v6" />
+    </svg>
+  );
+}
+
 export default function Sidebar({ active, email, onSignOut }) {
   const router = useRouter();
   const initials = (email || '?').slice(0, 2).toUpperCase();
@@ -51,6 +60,10 @@ export default function Sidebar({ active, email, onSignOut }) {
         <button className={`nav-item ${active === 'accounts' ? 'active' : ''}`} onClick={() => router.push('/accounts')}>
           <AccountsIcon />
           Accounts
+        </button>
+        <button className={`nav-item ${active === 'cashflow' ? 'active' : ''}`} onClick={() => router.push('/cashflow')}>
+          <CashflowIcon />
+          Cashflow
         </button>
       </nav>
 
