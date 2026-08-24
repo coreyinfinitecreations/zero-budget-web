@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { usePlaidLink } from 'react-plaid-link';
 import { supabase } from '../../lib/supabase';
 import { accountsApi, manualAccountsApi, plaidApi } from '../../lib/api';
-import { formatMoneyCents } from '../../lib/budget';
+import { formatMoneyCents, sanitizeMoneyDraft } from '../../lib/budget';
 import Sidebar from '../../components/Sidebar';
 import TopLoadingBar from '../../components/TopLoadingBar';
 
@@ -235,11 +235,11 @@ export default function AccountsPage() {
                   </select>
                   <input
                     className="field"
-                    type="number"
+                    type="text"
                     inputMode="decimal"
                     placeholder="Balance"
                     value={form.balance}
-                    onChange={(e) => setForm((f) => ({ ...f, balance: e.target.value }))}
+                    onChange={(e) => setForm((f) => ({ ...f, balance: sanitizeMoneyDraft(e.target.value) }))}
                   />
                   <button className="btn" type="submit">
                     Add

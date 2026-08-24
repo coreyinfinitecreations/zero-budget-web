@@ -7,6 +7,7 @@
   --blue-light: #eaf2fc;
   --green: #4caf50;       /* positive amounts / logo */
   --green-dark: #3d9140;
+  --green-bg: #eaf7ea;
   --danger: #d2453d;
   --danger-bg: #fdecea;
   --bg: #f4f5f7;
@@ -48,6 +49,7 @@
     --blue-light: #18293d;
     --green: #4caf50;
     --green-dark: #6fcf73;
+    --green-bg: #1c2e1f;
     --danger: #ef6e68;
     --danger-bg: #3a1f1f;
     --bg: #0f141a;
@@ -1073,7 +1075,9 @@ input {
   color: var(--text-3);
 }
 .cal-cell {
+  width: 30px;
   height: 30px;
+  justify-self: center;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1339,115 +1343,16 @@ input {
   margin: 0 0 10px 4px;
 }
 
-.cf-calendar {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 14px;
-  margin-bottom: 26px;
-}
-.cf-weekdays {
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  margin-bottom: 6px;
-}
-.cf-weekdays span {
-  text-align: center;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--text-3);
-}
-.cf-grid {
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
-}
-.cf-cell {
-  height: 52px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-}
-.cf-day {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-}
-.cf-day.negbal {
-  color: var(--danger);
-}
-.cf-day.low {
-  background: var(--danger-bg);
-  border: 1px solid var(--danger);
-  color: var(--danger);
-}
-.cf-day.today {
-  background: var(--blue);
-  color: #fff;
-  font-weight: 800;
-}
-.cf-dots {
-  display: flex;
-  gap: 3px;
-  height: 6px;
-}
-.cf-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 3px;
-  display: inline-block;
-}
-.cf-dot.income {
-  background: var(--blue);
-}
-.cf-dot.expense {
-  background: var(--danger);
-}
-.cf-legend {
-  display: flex;
-  justify-content: center;
-  gap: 16px;
-  margin-top: 8px;
-}
-.cf-legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-2);
-}
-.cf-legend .cf-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 4px;
-}
-
 .cf-timeline {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 16px;
   padding: 4px 0;
   margin-bottom: 26px;
-}
-.cf-undated-note {
-  display: flex;
-  gap: 8px;
-  padding: 12px 16px;
-  background: #fff7e6;
-  color: #7a5b12;
-  font-size: 12px;
-  line-height: 1.5;
-  border-radius: 16px 16px 0 0;
+  overflow: hidden;
 }
 .cf-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1455,6 +1360,61 @@ input {
 }
 .cf-row + .cf-row {
   border-top: 1px solid var(--border);
+}
+.cf-row:hover .grip {
+  opacity: 1;
+}
+.cf-row.nodrag {
+  color: var(--text-2);
+}
+.cf-row.editable {
+  cursor: pointer;
+}
+.cf-row.editable:hover .cf-row-title {
+  color: var(--blue);
+}
+.cf-row-bar {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  transition: width 0.15s ease;
+}
+.cf-row-bar.pos {
+  background: var(--green-bg);
+}
+.cf-row-bar.neg {
+  background: var(--danger-bg);
+}
+.cf-row.dragover {
+  outline: 2px dashed var(--blue);
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+.cf-unscheduled-zone {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.5;
+  border-top: 1px solid var(--border);
+}
+.cf-unscheduled-zone.over {
+  background: var(--blue-light);
+  color: var(--blue-dark);
+  outline: 2px dashed var(--blue);
+  outline-offset: -2px;
+}
+.cf-empty.nested {
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+}
+.cf-savestate {
+  color: var(--text-3);
+  font-weight: 400;
 }
 .cf-datebadge {
   flex-shrink: 0;
@@ -1477,9 +1437,6 @@ input {
   background: var(--surface-2);
   color: var(--text-3);
   font-size: 10px;
-}
-.cf-datebadge.blank {
-  background: transparent;
 }
 .cf-row-mid {
   flex: 1;

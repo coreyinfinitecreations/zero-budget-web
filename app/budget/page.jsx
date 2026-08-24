@@ -6,6 +6,7 @@ import { supabase } from '../../lib/supabase';
 import { accountsApi, plaidApi, stateApi, transactionsApi } from '../../lib/api';
 import Sidebar from '../../components/Sidebar';
 import TopLoadingBar from '../../components/TopLoadingBar';
+import CalendarPicker from '../../components/CalendarPicker';
 import {
   DEFAULT_CATEGORIES,
   computeTotals,
@@ -19,17 +20,12 @@ import {
   newId,
   normalizeBudgets,
   normalizeVendor,
+  ordinal,
   reconcileTransactions,
   roundMoney,
+  sanitizeMoneyDraft,
   shiftMonth,
 } from '../../lib/budget';
-
-// 1 -> "1st", 2 -> "2nd", etc.
-function ordinal(n) {
-  const s = ['th', 'st', 'nd', 'rd'];
-  const v = n % 100;
-  return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
-}
 
 // Normalize a Plaid (server) transaction into the panel's common shape.
 function fromPlaid(t) {
@@ -988,11 +984,11 @@ function EditableMoney({ value, onCommit }) {
       <input
         ref={inputRef}
         className="money editing"
-        type="number"
+        type="text"
         inputMode="decimal"
         value={draft}
         onClick={(e) => e.stopPropagation()}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => setDraft(sanitizeMoneyDraft(e.target.value))}
         onBlur={commit}
         onKeyDown={(e) => {
           if (e.key === 'Enter') commit();
@@ -1188,76 +1184,16 @@ function GroupCard({
   );
 }
 
-function CalendarPicker({ currentMonth, item, isIncome, onUpdate }) {
-  const [y, m] = String(currentMonth || '').split('-').map(Number);
-  const year = y || new Date().getFullYear();
-  const month = m || new Date().getMonth() + 1; // 1-based
-  const daysInMonth = new Date(year, month, 0).getDate();
-  const firstWeekday = new Date(year, month - 1, 1).getDay();
-  const monthLabel = new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-
-  const selected = item.cashflowDates && item.cashflowDates.length
-    ? [...item.cashflowDates].sort((a, b) => a - b)
-    : item.dueDate
-      ? [new Date(item.dueDate).getDate()]
-      : [];
-  const repeat = item.repeatMonthly !== false;
-
-  const apply = (days) => {
-    const sorted = [...new Set(days)].filter((d) => d >= 1 && d <= 31).sort((a, b) => a - b);
-    onUpdate('cashflowDates', sorted);
-    onUpdate('dueDate', sorted.length ? new Date(year, month - 1, sorted[0]).toISOString() : null);
-  };
-  const toggleDay = (d) => apply(selected.includes(d) ? selected.filter((x) => x !== d) : [...selected, d]);
-
-  const cells = [];
-  for (let i = 0; i < firstWeekday; i++) cells.push(null);
-  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
-
-  return (
-    <div className="cal">
-      <div className="cal-month">{monthLabel}</div>
-      <div className="cal-grid cal-weekdays">
-        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((w, i) => (
-          <span key={i} className="cal-wd">{w}</span>
-        ))}
-      </div>
-      <div className="cal-grid">
-        {cells.map((d, i) =>
-          d === null ? (
-            <span key={`b${i}`} className="cal-cell empty" />
-          ) : (
-            <button
-              key={d}
-              type="button"
-              className={`cal-cell ${selected.includes(d) ? 'on' : ''}`}
-              onClick={() => toggleDay(d)}
-            >
-              {d}
-            </button>
-          )
-        )}
-      </div>
-      <label className="cal-repeat">
-        <input type="checkbox" checked={repeat} onChange={(e) => onUpdate('repeatMonthly', e.target.checked)} />
-        Repeat monthly
-      </label>
-      <div className="cal-summary">
-        {selected.length === 0
-          ? `Pick the day(s) this ${isIncome ? 'income arrives' : 'is due'}.`
-          : repeat
-            ? `Repeats on the ${selected.map(ordinal).join(', ')} each month.`
-            : `${monthLabel} only — won’t carry to next month.`}
-      </div>
-    </div>
-  );
-}
-
 function ItemDetailPanel({ detailItem, detailTxns, currentMonth, onClose, onUpdate, onUnassign, onDelete }) {
   const { item, isIncome } = detailItem;
   const planned = Number(item.planned) || 0;
   const spent = Number(item.spent) || 0;
   const remaining = planned - spent;
+  const [plannedDraft, setPlannedDraft] = useState(String(item.planned ?? 0));
+
+  useEffect(() => {
+    setPlannedDraft(String(item.planned ?? 0));
+  }, [item.id]);
 
   return (
     <aside className="txpanel">
@@ -1288,10 +1224,14 @@ function ItemDetailPanel({ detailItem, detailTxns, currentMonth, onClose, onUpda
         <label className="detail-label">Planned</label>
         <input
           className="detail-input"
-          type="number"
+          type="text"
           inputMode="decimal"
-          value={item.planned ?? 0}
-          onChange={(e) => onUpdate('planned', roundMoney(Number(e.target.value) || 0))}
+          value={plannedDraft}
+          onChange={(e) => {
+            const cleaned = sanitizeMoneyDraft(e.target.value);
+            setPlannedDraft(cleaned);
+            onUpdate('planned', roundMoney(Number(cleaned) || 0));
+          }}
         />
 
         <label className="detail-label">{isIncome ? 'Expected dates' : 'Due dates'}</label>

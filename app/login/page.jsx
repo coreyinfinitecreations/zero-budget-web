@@ -4,6 +4,15 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabase';
 
+// Dev-only convenience: when running `next dev` with NEXT_PUBLIC_DEV_EMAIL /
+// NEXT_PUBLIC_DEV_PASSWORD set in .env.local, sign in with those automatically
+// instead of showing the form. Gated on NODE_ENV so it's inert in any
+// production build even if those vars end up in a shared env file.
+const DEV_AUTO_LOGIN =
+  process.env.NODE_ENV !== 'production' &&
+  !!process.env.NEXT_PUBLIC_DEV_EMAIL &&
+  !!process.env.NEXT_PUBLIC_DEV_PASSWORD;
+
 export default function LoginPage() {
   const router = useRouter();
   const [mode, setMode] = useState('signin'); // 'signin' | 'signup'
@@ -12,13 +21,44 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [checkingSession, setCheckingSession] = useState(true);
 
-  // If already signed in, go straight to the budget.
+  // If already signed in, go straight to the budget. Otherwise, in local dev
+  // with dev credentials configured, sign in with those automatically.
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) router.replace('/budget');
-    });
+    let active = true;
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      if (data.session) {
+        router.replace('/budget');
+        return;
+      }
+      if (DEV_AUTO_LOGIN) {
+        const { error: err } = await supabase.auth.signInWithPassword({
+          email: process.env.NEXT_PUBLIC_DEV_EMAIL,
+          password: process.env.NEXT_PUBLIC_DEV_PASSWORD,
+        });
+        if (!active) return;
+        if (!err) {
+          router.replace('/budget');
+          return;
+        }
+        setError(`Dev auto-login failed: ${err.message}`);
+      }
+      if (active) setCheckingSession(false);
+    })();
+    return () => {
+      active = false;
+    };
   }, [router]);
+
+  if (checkingSession) {
+    return (
+      <div className="auth-wrap">
+        <div className="center-note">{DEV_AUTO_LOGIN ? 'Signing you in…' : 'Loading…'}</div>
+      </div>
+    );
+  }
 
   async function onSubmit(e) {
     e.preventDefault();
