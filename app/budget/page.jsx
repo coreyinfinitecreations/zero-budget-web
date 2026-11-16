@@ -37,7 +37,23 @@ function fromPlaid(t) {
     type: Number(t.amount) < 0 ? 'income' : 'expense',
     date: t.date ? new Date(t.date).toISOString() : new Date().toISOString(),
     source: 'plaid',
+    accountId: t.account_id || null,
+    plaidCategory: Array.isArray(t.category) ? t.category.filter(Boolean).join(' › ') : '',
   };
+}
+
+// Short bank label for a connected account, e.g. "Chase ••1234".
+function shortAccountLabel(account) {
+  if (!account) return 'Bank';
+  return [account.institution || account.name, account.mask ? `••${account.mask}` : null]
+    .filter(Boolean)
+    .join(' ');
+}
+
+// Where a transaction came from: the bank account (Plaid) or "Manual".
+function sourceLabelOf(tx, accountsById) {
+  if (tx.source !== 'plaid') return 'Manual';
+  return shortAccountLabel(accountsById[tx.accountId]);
 }
 
 export default function BudgetPage() {
@@ -52,6 +68,8 @@ export default function BudgetPage() {
     vendorMemory: {},
   });
   const [plaidTxns, setPlaidTxns] = useState([]);
+  const [accounts, setAccounts] = useState([]);
+  const [selectedTxKey, setSelectedTxKey] = useState(null); // `${source}:${id}`
   const [currentMonth, setCurrentMonth] = useState(getMonthKey(new Date()));
   const [saveState, setSaveState] = useState('saved'); // 'saved' | 'saving' | 'error'
   const [addingCat, setAddingCat] = useState(false);
@@ -111,6 +129,7 @@ export default function BudgetPage() {
       if (active) setTxLoading(true);
       try {
         const { accounts } = await accountsApi.list();
+        if (active) setAccounts(accounts || []);
         if (accounts?.length) {
           try {
             await plaidApi.syncTransactions();
@@ -449,6 +468,19 @@ export default function BudgetPage() {
     [doc.vendorMemory, categories]
   );
 
+  // Remove the remembered vendor → item rule so Quick assign stops suggesting it.
+  // The next time this vendor is assigned (drag or picker), a new rule is saved.
+  const forgetVendorRule = useCallback((vendor) => {
+    const key = normalizeVendor(vendor);
+    if (!key) return;
+    setDoc((prev) => {
+      if (!prev.vendorMemory?.[key]) return prev;
+      const vendorMemory = { ...prev.vendorMemory };
+      delete vendorMemory[key];
+      return { ...prev, vendorMemory };
+    });
+  }, []);
+
   // Archive (soft-delete) a transaction. Manual → deleted; Plaid → dismissed
   // (added to assignedPlaidTxIds so it leaves the New tray). If it was assigned
   // to a budget item, its amount is removed from that item's Spent.
@@ -523,6 +555,7 @@ export default function BudgetPage() {
     setTxStatus('');
     try {
       const { accounts } = await accountsApi.list();
+      setAccounts(accounts || []);
       if (!accounts?.length) {
         setTxStatus('No banks connected yet — connect one on the Accounts page.');
         return;
@@ -646,6 +679,67 @@ export default function BudgetPage() {
     });
     return map;
   }, [categories, doc.transactions]);
+
+  const accountsById = useMemo(() => {
+    const map = {};
+    accounts.forEach((a) => {
+      map[a.id] = a;
+    });
+    return map;
+  }, [accounts]);
+
+  // Find the budget item a transaction is assigned to in the current month.
+  const findAssignment = useCallback(
+    (tx) => {
+      let target = null;
+      if (tx.source === 'plaid') {
+        categories.forEach((c) =>
+          c.items.forEach((i) => {
+            if ((i.plaidTxIds || []).includes(tx.id)) target = { categoryId: c.id, itemId: i.id };
+          })
+        );
+      } else {
+        target = (doc.transactions || []).find((t) => t.id === tx.id && t.tracked)?.assignedTo || null;
+      }
+      if (!target) return null;
+      const cat = categories.find((c) => c.id === target.categoryId);
+      const item = cat?.items.find((i) => String(i.id) === String(target.itemId));
+      if (!cat || !item) return null;
+      return { categoryId: cat.id, itemId: item.id, itemName: item.name || 'Untitled', categoryName: cat.name };
+    },
+    [categories, doc.transactions]
+  );
+
+  // Full context for the transaction detail view.
+  const txDetail = useMemo(() => {
+    if (!selectedTxKey) return null;
+    const tx = allTxns.find((t) => `${t.source}:${t.id}` === selectedTxKey);
+    if (!tx) return null;
+    const assignment = findAssignment(tx);
+    const isArchived = archivedTxns.some((t) => t.source === tx.source && t.id === tx.id);
+    return {
+      tx,
+      account: tx.source === 'plaid' ? accountsById[tx.accountId] || null : null,
+      sourceLabel: sourceLabelOf(tx, accountsById),
+      assignment,
+      status: assignment ? 'tracked' : isArchived ? 'archived' : 'new',
+      rule: getVendorSuggestion(tx.vendor),
+    };
+  }, [selectedTxKey, allTxns, archivedTxns, accountsById, findAssignment, getVendorSuggestion]);
+
+  // Assign (or move) a transaction to a budget item from the detail picker.
+  const moveTransaction = useCallback(
+    (tx, categoryId, itemId) => {
+      if (findAssignment(tx)) unassignTransaction(tx);
+      assignTransaction(tx, categoryId, itemId);
+    },
+    [findAssignment, unassignTransaction, assignTransaction]
+  );
+
+  const openTxDetail = (tx) => {
+    setSelectedItem(null);
+    setSelectedTxKey(`${tx.source}:${tx.id}`);
+  };
 
   const incomeCats = ready ? categories.filter((c) => c.type === 'income') : [];
   const expenseCats = ready ? categories.filter((c) => c.type === 'expense') : [];
@@ -782,7 +876,10 @@ export default function BudgetPage() {
               reorderOver={reorderOver}
               setReorderOver={setReorderOver}
               selectedItemKey={selectedItem ? `${selectedItem.catId}:${selectedItem.itemId}` : null}
-              onSelectItem={(catId, itemId) => setSelectedItem({ catId, itemId })}
+              onSelectItem={(catId, itemId) => {
+                setSelectedTxKey(null);
+                setSelectedItem({ catId, itemId });
+              }}
               editMode={editMode}
               onStartItemReorder={startReorder}
               onStartCategoryReorder={startReorder}
@@ -867,6 +964,13 @@ export default function BudgetPage() {
           onCloseDetail={() => setSelectedItem(null)}
           onUpdateDetail={updateDetailField}
           onDeleteDetailItem={deleteDetailItem}
+          accountsById={accountsById}
+          onOpenTx={openTxDetail}
+          txDetail={txDetail}
+          categories={categories}
+          onCloseTx={() => setSelectedTxKey(null)}
+          onMoveTx={moveTransaction}
+          onForgetRule={forgetVendorRule}
         />
       )}
 
@@ -1184,7 +1288,7 @@ function GroupCard({
   );
 }
 
-function ItemDetailPanel({ detailItem, detailTxns, currentMonth, onClose, onUpdate, onUnassign, onDelete }) {
+function ItemDetailPanel({ detailItem, detailTxns, currentMonth, onClose, onUpdate, onUnassign, onDelete, accountsById }) {
   const { item, isIncome } = detailItem;
   const planned = Number(item.planned) || 0;
   const spent = Number(item.spent) || 0;
@@ -1262,7 +1366,7 @@ function ItemDetailPanel({ detailItem, detailTxns, currentMonth, onClose, onUpda
                 </div>
                 <div className="txmid">
                   <div className="txvendor">{tx.vendor}</div>
-                  <div className="txsub">{tx.source === 'plaid' ? 'Bank' : 'Manual'}</div>
+                  <div className="txsub">{sourceLabelOf(tx, accountsById)}</div>
                 </div>
                 <div className="txright">
                   <span className={`txamt ${isInc ? 'pos' : ''}`}>
@@ -1281,6 +1385,139 @@ function ItemDetailPanel({ detailItem, detailTxns, currentMonth, onClose, onUpda
         <button className="detail-delete" onClick={onDelete}>
           Delete budget item
         </button>
+      </div>
+    </aside>
+  );
+}
+
+// Detail view for a single transaction: where it came from, which budget item
+// it's assigned to, and the vendor auto-assign rule behind Quick assign.
+function TransactionDetailPanel({ detail, categories, onClose, onMove, onUnassign, onForgetRule, onArchive, onRestore }) {
+  const { tx, account, sourceLabel, assignment, status, rule } = detail;
+  const isIncome = tx.type === 'income';
+  const pickerValue = assignment ? `${assignment.categoryId}::${assignment.itemId}` : '';
+  const hasItems = categories.some((c) => c.items.length > 0);
+
+  const handlePick = (value) => {
+    if (!value || value === pickerValue) return;
+    const [categoryId, itemId] = value.split('::');
+    onMove(tx, categoryId, itemId);
+  };
+
+  return (
+    <aside className="txpanel">
+      <div className="detail-head">
+        <button className="detail-back" onClick={onClose}>
+          ‹ Transactions
+        </button>
+      </div>
+      <div className="detail-body">
+        <div className="detail-title static">{tx.vendor}</div>
+        <div className="detail-remaining">
+          <span className={`amt ${isIncome ? 'pos' : ''}`}>
+            {isIncome ? '+' : '-'}
+            {formatMoneyCents(tx.amount)}
+          </span>{' '}
+          {isIncome ? 'income' : 'expense'}
+        </div>
+        <div className="detail-sub">
+          {new Date(tx.date).toLocaleDateString('en-US', {
+            weekday: 'short',
+            month: 'long',
+            day: 'numeric',
+            year: 'numeric',
+          })}
+        </div>
+
+        <label className="detail-label">Account</label>
+        <div className="txd-card">
+          <div className="txd-strong">{sourceLabel}</div>
+          {account && (
+            <div className="txd-muted">
+              {[account.name, account.subtype || account.type].filter(Boolean).join(' · ')}
+            </div>
+          )}
+          {tx.source === 'plaid' && !account && (
+            <div className="txd-muted">This bank account is no longer connected.</div>
+          )}
+          {tx.plaidCategory && <div className="txd-muted">Bank category: {tx.plaidCategory}</div>}
+        </div>
+
+        <label className="detail-label">Budget item</label>
+        <div className="txd-card">
+          {assignment ? (
+            <div className="txd-row">
+              <div>
+                <div className="txd-strong">{assignment.itemName}</div>
+                <div className="txd-muted">{assignment.categoryName}</div>
+              </div>
+              <button className="txd-btn" onClick={() => onUnassign(tx)}>
+                Unassign
+              </button>
+            </div>
+          ) : (
+            <div className="txd-muted">
+              {status === 'archived' ? 'Archived — not assigned.' : 'Not assigned to a budget item.'}
+            </div>
+          )}
+          {hasItems && (
+            <select
+              className="detail-input txd-select"
+              value={pickerValue}
+              onChange={(e) => handlePick(e.target.value)}
+            >
+              <option value="">{assignment ? 'Move to another item…' : 'Assign to a budget item…'}</option>
+              {categories
+                .filter((c) => c.items.length > 0)
+                .map((c) => (
+                  <optgroup key={c.id} label={c.name}>
+                    {c.items.map((i) => (
+                      <option key={i.id} value={`${c.id}::${i.id}`}>
+                        {i.name || 'Untitled'}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+            </select>
+          )}
+        </div>
+
+        <label className="detail-label">Auto-assign</label>
+        <div className="txd-card">
+          {rule ? (
+            <>
+              <div className="txd-muted">
+                “{tx.vendor}” transactions are suggested for{' '}
+                <strong className="txd-strong-inline">{rule.itemName || 'Untitled'}</strong> ({rule.categoryName}).
+              </div>
+              <button className="txd-btn danger" onClick={() => onForgetRule(tx.vendor)}>
+                Stop auto-assigning
+              </button>
+            </>
+          ) : (
+            <div className="txd-muted">
+              No rule for “{tx.vendor}”. Drag this transaction onto a budget item (or pick one above) and
+              future transactions from this merchant will be suggested for that item.
+            </div>
+          )}
+        </div>
+
+        {status === 'new' && (
+          <button
+            className="detail-delete"
+            onClick={() => {
+              onArchive(tx);
+              onClose();
+            }}
+          >
+            Archive transaction
+          </button>
+        )}
+        {status === 'archived' && (
+          <button className="txd-btn wide" onClick={() => onRestore(tx)}>
+            Restore to New
+          </button>
+        )}
       </div>
     </aside>
   );
@@ -1337,6 +1574,13 @@ function TransactionPanel({
   onCloseDetail,
   onUpdateDetail,
   onDeleteDetailItem,
+  accountsById,
+  onOpenTx,
+  txDetail,
+  categories,
+  onCloseTx,
+  onMoveTx,
+  onForgetRule,
 }) {
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
@@ -1361,6 +1605,22 @@ function TransactionPanel({
         onUpdate={onUpdateDetail}
         onUnassign={onUnassign}
         onDelete={onDeleteDetailItem}
+        accountsById={accountsById}
+      />
+    );
+  }
+
+  if (txDetail) {
+    return (
+      <TransactionDetailPanel
+        detail={txDetail}
+        categories={categories}
+        onClose={onCloseTx}
+        onMove={onMoveTx}
+        onUnassign={onUnassign}
+        onForgetRule={onForgetRule}
+        onArchive={onArchive}
+        onRestore={onRestore}
       />
     );
   }
@@ -1513,7 +1773,7 @@ function TransactionPanel({
                   draggable={!selectMode}
                   onDragStart={() => onDragStartTx(tx, txTab === 'tracked')}
                   onDragEnd={onDragEndTx}
-                  onClick={selectMode ? () => toggleSel(tx) : undefined}
+                  onClick={() => (selectMode ? toggleSel(tx) : onOpenTx(tx))}
                 >
                   {selectMode && <input type="checkbox" className="txcheck" checked={checked} readOnly />}
                   <div className={`txdate ${isIncome ? 'income' : 'expense'}`}>
@@ -1523,13 +1783,12 @@ function TransactionPanel({
                   <div className="txmid">
                     <div className="txvendor">{tx.vendor}</div>
                     <div className="txsub">
+                      {sourceLabelOf(tx, accountsById)} ·{' '}
                       {txTab === 'tracked'
                         ? `→ ${assignmentNameMap[tx.id] || 'Tracked'}`
                         : txTab === 'archived'
                           ? 'Archived'
-                          : tx.source === 'plaid'
-                            ? 'Bank · Unassigned'
-                            : 'Manual · Unassigned'}
+                          : 'Unassigned'}
                     </div>
                     {suggestion && (
                       <button

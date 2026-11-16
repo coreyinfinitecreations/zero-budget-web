@@ -1138,6 +1138,72 @@ input {
   background: var(--danger-bg);
 }
 
+/* ============ Transaction detail panel ============ */
+.txrow:not(.selectable) {
+  cursor: pointer;
+}
+.detail-title.static {
+  overflow-wrap: anywhere;
+}
+.txd-card {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.txd-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.txd-strong,
+.txd-strong-inline {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+.txd-muted {
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.45;
+}
+.txd-select {
+  font-size: 14px;
+  padding: 8px 10px;
+}
+.txd-btn {
+  align-self: flex-start;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  border-radius: 8px;
+  padding: 6px 12px;
+  flex-shrink: 0;
+}
+.txd-btn:hover {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+.txd-btn.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.txd-btn.danger:hover {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.txd-btn.wide {
+  margin-top: 24px;
+  width: 100%;
+  padding: 10px;
+}
+
 /* ============ Accounts page ============ */
 .acct-status {
   background: var(--blue-light);
